@@ -51,6 +51,14 @@ export function newMatch(id: MatchId, nbSets: number, opponents: number): Match 
 export function computeScoreRatio(scored: number, conceded: number): number {
   return scored + conceded === 0 ? 0.5 : ((scored - conceded) / (scored + conceded) + 1) / 2 // between 0 and 1, 0.5 if draw
 }
+
+/**
+ * Type guard narrowing an Opponent to a TeamOpponent, avoiding `as TeamOpponent` casts.
+ */
+export function isTeamOpponent(opponent: Opponent): opponent is TeamOpponent {
+  return opponent.type === "team"
+}
+
 export function deepCopyOpponents(opponents: (Opponent | undefined)[]): (Opponent | undefined)[] {
   return opponents.map((o) => {
     if (!o) {
