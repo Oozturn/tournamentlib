@@ -1,4 +1,4 @@
-import { compatibleIds, deepCopyMatch, deepCopyOpponents, idToString, sameResults } from "./tools"
+import { compatibleIds, deepCopyMatch, deepCopyOpponents, idToString, isTeamOpponent, sameResults } from "./tools"
 import { PhaseType } from "./types"
 import type {
   Opponent,
@@ -61,9 +61,9 @@ export abstract class PhaseBase implements Phase {
     this.tournamentPhase = tournamentPhase
     this.opponents = deepCopyOpponents(opponents).filter((o) => o !== undefined)
     this.opponents.forEach((opponent) => {
-      if (opponent.type === "team") {
-        this.players.push(...(opponent as TeamOpponent).players)
-        ;(opponent as TeamOpponent).players.forEach((p) => this.teamOfPlayers.set(p.id, opponent as TeamOpponent))
+      if (isTeamOpponent(opponent)) {
+        this.players.push(...opponent.players)
+        opponent.players.forEach((p) => this.teamOfPlayers.set(p.id, opponent))
       } else {
         this.players.push(opponent as PlayerOpponent)
       }
@@ -171,9 +171,9 @@ export abstract class PhaseBase implements Phase {
       throw new Error(`toggleForfeit: opponent ${opponentId} not found.`)
     }
     // Opponent is a team
-    if (opponent.type === "team") {
+    if (isTeamOpponent(opponent)) {
       opponent.forfeit = !opponent.forfeit
-      ;(opponent as TeamOpponent).players.forEach((p) => (p.forfeit = opponent.forfeit))
+      opponent.players.forEach((p) => (p.forfeit = opponent.forfeit))
     }
     // Opponent is a player
     else {
