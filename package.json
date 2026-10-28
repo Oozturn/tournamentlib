@@ -22,12 +22,16 @@
     "dev": "tsup --watch",
     "test": "jest",
     "test:watch": "jest --watch",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepare": "husky"
   },
   "devDependencies": {
     "@types/jest": "^30.0.0",
     "@types/node": "^24.3.0",
+    "husky": "^9.1.7",
     "jest": "^30.1.0",
+    "lint-staged": "^17.6.0",
+    "prettier": "3.9.10",
     "ts-jest": "^29.4.1",
     "tsup": "^8.5.0",
     "typescript": "^5.9.2"
@@ -39,5 +43,8 @@
     "trailingComma": "none",
     "printWidth": 120,
     "objectWrap": "preserve"
+  },
+  "lint-staged": {
+    "*.{js,ts,css,md,json}": "prettier --write"
   }
 }
