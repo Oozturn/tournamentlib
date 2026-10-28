@@ -1,5 +1,5 @@
 ﻿import { PhaseBase } from "../phase"
-import { computeScoreRatio, idToString, newMatch } from "../tools"
+import { computeScoreRatio, idToString, isTeamOpponent, newMatch } from "../tools"
 import {
   Match,
   MatchId,
@@ -9,7 +9,6 @@ import {
   PhaseBracket,
   PlayerOpponent,
   SetId,
-  TeamOpponent,
   type Opponent,
   type PhaseSettings,
   type TournamentPhase
@@ -429,17 +428,17 @@ export class DuelPhase extends PhaseBase {
         this.updateMatchCache(matchToProgress)
       }
       if (winnerId) {
-        if (matchToProgress.opponents.find((o) => o?.id === winnerId && o?.type === "team")) {
-          const team = matchToProgress.opponents.find((o) => o?.id === winnerId) as TeamOpponent
-          team.players.forEach((player) => this.playersToUpdateTelemetry.add(player.id))
+        const winner = matchToProgress.opponents.find((o) => o?.id === winnerId)
+        if (winner && isTeamOpponent(winner)) {
+          winner.players.forEach((player) => this.playersToUpdateTelemetry.add(player.id))
         } else {
           this.playersToUpdateTelemetry.add(winnerId)
         }
       }
       if (loserId) {
-        if (matchToProgress.opponents.find((o) => o?.id === loserId && o?.type === "team")) {
-          const team = matchToProgress.opponents.find((o) => o?.id === loserId) as TeamOpponent
-          team.players.forEach((player) => this.playersToUpdateTelemetry.add(player.id))
+        const loser = matchToProgress.opponents.find((o) => o?.id === loserId)
+        if (loser && isTeamOpponent(loser)) {
+          loser.players.forEach((player) => this.playersToUpdateTelemetry.add(player.id))
         } else {
           this.playersToUpdateTelemetry.add(loserId)
         }
@@ -651,12 +650,12 @@ export class DuelPhase extends PhaseBase {
       }
       const ratioPoints = computeScoreRatio(scored, conceded)
 
-      if (o.type === "player") {
-        updatePlayerCache(o.id, o.forfeit, { scored, conceded, ratioPoints })
-      } else {
-        return (o as TeamOpponent).players.forEach((p) => {
+      if (isTeamOpponent(o)) {
+        return o.players.forEach((p) => {
           updatePlayerCache(p.id, p.forfeit, { scored, conceded, ratioPoints })
         })
+      } else {
+        updatePlayerCache(o.id, o.forfeit, { scored, conceded, ratioPoints })
       }
     })
   }
