@@ -20,15 +20,32 @@ export interface Phase {
   readonly type: PhaseType
   readonly settings: PhaseSettings
 
+  /** Returns the current ranking of the phase, one entry per player, sorted by rank. */
   getResult(): Result[]
+  /** Returns the phase completion ratio, from 0 (no match complete) to 1 (all matches complete). */
   getCompletion(): number
 
+  /**
+   * Returns the opponents of the phase.
+   * @param includeForfeited Whether to include opponents who have forfeited
+   * @param individualOpponents Whether to return players (true) instead of the phase's opponents, which may be teams (false)
+   */
   getOpponents(includeForfeited: boolean, individualOpponents: boolean): Opponent[]
+  /**
+   * Toggles the forfeit status of an opponent (or a player within a team), then re-progresses the phase so that
+   * matches, telemetry and results reflect the new forfeit state.
+   */
   toggleForfeit(opponentId: OpponentId): void
 
+  /** Returns a single match by id, or undefined if it does not exist. */
   getMatch(matchId: MatchId): Match | undefined
+  /** Returns every match matching the given partial id (e.g. all matches of a given round or bracket). */
   getMatches(filter: Partial<MatchId>): Match[]
 
+  /**
+   * Records (or removes, when score is undefined) an opponent's score for a given set, then progresses the
+   * tournament, recomputes completion, telemetry and results accordingly.
+   */
   score(setId: SetId, opponentId: OpponentId, score: number | undefined): void
 }
 
@@ -79,80 +96,49 @@ export abstract class PhaseBase implements Phase {
     // this.indexMatches()
   }
 
-  protected validateOpponents(opponents: Opponent[]): void {
-    if (opponents.length < 2) {
-      throw new Error(`validateOpponents: at least 2 opponents are required.`)
-    }
-    const uniqOpponents = new Set(opponents.map((o) => o.id))
-    if (Array.from(uniqOpponents).length != opponents.length) {
-      throw new Error(`validateOpponents: unicity in opponents id is not respected.`)
-    }
-    if (opponents[0]!.type === "team") {
-      ;(opponents as TeamOpponent[]).flatMap((t) => t.players.map((p) => p.id)).forEach((id) => uniqOpponents.add(id))
-      if (
-        Array.from(uniqOpponents).length !=
-        opponents.length + (opponents as TeamOpponent[]).flatMap((t) => t.players.map((p) => p.id)).length
-      ) {
-        throw new Error(`validateOpponents: unicity in opponents id is not respected.`)
-      }
-    }
-  }
-  protected validateSettings(settings: PhaseSettings, opponents: Opponent[]): void {
-    if (!["duel", "ffa", "roundrobin"].includes(settings.type)) {
-      throw new Error(`validateSettings: type must be one of 'duel', 'ffa' or 'roundrobin'.`)
-    }
-    if (settings.nbMatchSets.length === 0) {
-      throw new Error(`validateSettings: nbMatchSets must not be empty.`)
-    }
-    if (settings.nbMatchSets.some((set) => typeof set === "string" || (set as unknown) instanceof String)) {
-      throw new Error(`validateSettings: all nbMatchSets must be numbers.`)
-    }
-    if (settings.nbMatchSets.some((set) => set <= 0)) {
-      throw new Error(`validateSettings: all nbMatchSets must be greater than 0.`)
-    }
-    if (!["bestOfN", "sumOfSets"].includes(settings.matchWinRule)) {
-      throw new Error(`validateSettings: matchWinRule must be either "bestOfN" or "sumOfSets".`)
-    }
-  }
+  /**
+   * This method is called in the constructor of the subclasses to generate the matches for the phase.
+   * It is up to the subclass to implement the logic for generating matches, as it depends on the phase type.
+   * After generating matches, the subclass should call indexMatches() to ensure the match index is up to date.
+   */
+  protected abstract generateMatches(): void
+
+  /**
+   * This method is called after a score is set, and should progress the tournament if needed.
+   * It is up to the subclass to implement the logic for progressing the tournament, as it depends on the phase type.
+   * Update telemetry of the match opponents if needed.
+   */
+  protected abstract progress(): void
+
+  /**
+   * This method is called from score() when a set is complete.
+   * It saves the contribution of each player (not team) in the set to the setContribCache, so that it can be
+   * used later to update telemetry or progress the tournament without parsing all the matches again.
+   * @param setId The ID of the set to save
+   * @param match The match containing the set to save
+   */
+  protected abstract updateSetCache(setId: SetId, match: Match): void
+
+  /**
+   * This method is called from progress() when a match is complete.
+   * It saves the contribution of each opponent (player or team) in the match to the matchContribCache, so that it can be
+   * used later to update telemetry or progress the tournament without parsing all the matches again.
+   * @param match The match to save
+   */
+  protected abstract updateMatchCache(match: Match): void
+
+  /**
+   * Updates the telemetry for the opponents in PhaseBase.opponentsToUpdateTelemetry
+   *
+   */
+  protected abstract updatePlayersTelemetry(): void
 
   public getResult(): Result[] {
     return this.resultsCache.map((r) => ({ ...r, telemetry: { ...r.telemetry } }))
   }
-  protected updateResultsCache() {
-    // Get players telemetry, extract the place and forfeit status, and update the resultsCache
-    const results = this.players.map((player) => {
-      return {
-        opponentId: player.id,
-        rank: 0,
-        forfeit: player.forfeit,
-        telemetry: player.stats
-      }
-    })
 
-    this.resultsCache = results
-      .sort(
-        // TODO: Validate the sorting criteria
-        ({ forfeit: ffa, telemetry: a }, { forfeit: ffb, telemetry: b }) =>
-          (ffa ? 1 : 0) - (ffb ? 1 : 0) ||
-          b.matchesWon - a.matchesWon ||
-          b.setsWon - a.setsWon ||
-          b.matchesDraw - a.matchesDraw ||
-          b.setsDraw - a.setsDraw ||
-          b.ratioPoints - a.ratioPoints
-      )
-      .map((result, index) => ({ ...result, rank: index + 1 }))
-
-    this.resultsCache.forEach((result, index) => {
-      if (this.resultsCache[index + 1] && sameResults(result, this.resultsCache[index + 1]!)) {
-        this.resultsCache[index + 1]!.rank = result.rank
-      }
-    })
-  }
   public getCompletion(): number {
     return this.completion
-  }
-  protected updateCompletion() {
-    this.completion = this.matches.filter((match) => match.complete).length / this.matches.length
   }
 
   public getOpponents(includeForfeited: boolean, individualOpponents: boolean): Opponent[] {
@@ -165,6 +151,7 @@ export abstract class PhaseBase implements Phase {
       (o) => o !== undefined
     )
   }
+
   public toggleForfeit(opponentId: OpponentId): void {
     const opponent = this.opponents.find((o) => o.id === opponentId) || this.players.find((p) => p.id === opponentId)
     if (!opponent) {
@@ -200,33 +187,14 @@ export abstract class PhaseBase implements Phase {
     this.updateResultsCache()
   }
 
-  /**
-   * This method is called in the constructor of the subclasses to generate the matches for the phase.
-   * It is up to the subclass to implement the logic for generating matches, as it depends on the phase type.
-   * After generating matches, the subclass should call indexMatches() to ensure the match index is up to date.
-   */
-  protected abstract generateMatches(): void
-
-  protected indexMatches(): void {
-    this.matchIndex.clear()
-    for (const match of this.matches) {
-      this.matchIndex.set(idToString(match.id), match)
-    }
-  }
   public getMatch(matchId: MatchId): Match | undefined {
     return deepCopyMatch(this._getMatch(matchId))
   }
+
   public getMatches(filter?: Partial<MatchId>): Match[] {
     return this._getMatches(filter)
       .map((m) => deepCopyMatch(m))
       .filter((m) => m !== undefined)
-  }
-  protected _getMatch(matchId: MatchId): Match | undefined {
-    const { set, ...mId } = matchId
-    return this.matchIndex.get(idToString(mId)) || this.matches.find((match) => compatibleIds(mId, match.id))
-  }
-  protected _getMatches(filter?: Partial<MatchId>): Match[] {
-    return this.matches.filter((match) => !filter || compatibleIds(filter, match.id))
   }
 
   public score(setId: SetId, opponentId: OpponentId, score: number | undefined): void {
@@ -259,9 +227,90 @@ export abstract class PhaseBase implements Phase {
     this.updatePlayersTelemetry()
     this.updateResultsCache()
   }
+
+  protected validateOpponents(opponents: Opponent[]): void {
+    if (opponents.length < 2) {
+      throw new Error(`validateOpponents: at least 2 opponents are required.`)
+    }
+    const uniqOpponents = new Set(opponents.map((o) => o.id))
+    if (Array.from(uniqOpponents).length != opponents.length) {
+      throw new Error(`validateOpponents: unicity in opponents id is not respected.`)
+    }
+    if (opponents[0]!.type === "team") {
+      ;(opponents as TeamOpponent[]).flatMap((t) => t.players.map((p) => p.id)).forEach((id) => uniqOpponents.add(id))
+      if (
+        Array.from(uniqOpponents).length !=
+        opponents.length + (opponents as TeamOpponent[]).flatMap((t) => t.players.map((p) => p.id)).length
+      ) {
+        throw new Error(`validateOpponents: unicity in opponents id is not respected.`)
+      }
+    }
+  }
+
+  protected validateSettings(settings: PhaseSettings, _opponents: Opponent[]): void {
+    if (!["duel", "ffa", "roundrobin"].includes(settings.type)) {
+      throw new Error(`validateSettings: type must be one of 'duel', 'ffa' or 'roundrobin'.`)
+    }
+    if (settings.nbMatchSets.length === 0) {
+      throw new Error(`validateSettings: nbMatchSets must not be empty.`)
+    }
+    if (settings.nbMatchSets.some((set) => typeof set === "string" || (set as unknown) instanceof String)) {
+      throw new Error(`validateSettings: all nbMatchSets must be numbers.`)
+    }
+    if (settings.nbMatchSets.some((set) => set <= 0)) {
+      throw new Error(`validateSettings: all nbMatchSets must be greater than 0.`)
+    }
+    if (!["bestOfN", "sumOfSets"].includes(settings.matchWinRule)) {
+      throw new Error(`validateSettings: matchWinRule must be either "bestOfN" or "sumOfSets".`)
+    }
+  }
+
+  protected updateResultsCache() {
+    // Get players telemetry, extract the place and forfeit status, and update the resultsCache
+    const results = this.players.map((player) => {
+      return {
+        opponentId: player.id,
+        rank: 0,
+        forfeit: player.forfeit,
+        telemetry: player.stats
+      }
+    })
+
+    this.resultsCache = results
+      .sort(
+        // TODO: Validate the sorting criteria
+        ({ forfeit: ffa, telemetry: a }, { forfeit: ffb, telemetry: b }) =>
+          (ffa ? 1 : 0) - (ffb ? 1 : 0) ||
+          b.matchesWon - a.matchesWon ||
+          b.setsWon - a.setsWon ||
+          b.matchesDraw - a.matchesDraw ||
+          b.setsDraw - a.setsDraw ||
+          b.ratioPoints - a.ratioPoints
+      )
+      .map((result, index) => ({ ...result, rank: index + 1 }))
+
+    this.resultsCache.forEach((result, index) => {
+      if (this.resultsCache[index + 1] && sameResults(result, this.resultsCache[index + 1]!)) {
+        this.resultsCache[index + 1]!.rank = result.rank
+      }
+    })
+  }
+
+  protected updateCompletion() {
+    this.completion = this.matches.filter((match) => match.complete).length / this.matches.length
+  }
+
+  protected indexMatches(): void {
+    this.matchIndex.clear()
+    for (const match of this.matches) {
+      this.matchIndex.set(idToString(match.id), match)
+    }
+  }
+
   protected matchIsComplete(match: Match): boolean {
     return match.sets.every((set) => Object.keys(set.scores).length === match.opponents.length)
   }
+
   /**
    * If the score is impossible to set, returns a string explaining why. Otherwise returns nothing
    * @param setId The ID of the set to score
@@ -269,7 +318,7 @@ export abstract class PhaseBase implements Phase {
    * @param score The score to set, or undefined to remove the score
    * @returns A string explaining why the score is impossible, or nothing if it is possible
    */
-  protected notScorable(setId: SetId, opponentId: OpponentId, score: number | undefined): string | void {
+  protected notScorable(setId: SetId, opponentId: OpponentId, _score: number | undefined): string | void {
     const match = this._getMatch(setId)
     if (!match) {
       return `Match not found`
@@ -289,33 +338,12 @@ export abstract class PhaseBase implements Phase {
     // Additional checks can be implemented in subclasses
   }
 
-  /**
-   * This method is called after a score is set, and should progress the tournament if needed.
-   * It is up to the subclass to implement the logic for progressing the tournament, as it depends on the phase type.
-   * Update telemetry of the match opponents if needed.
-   */
-  protected abstract progress(): void
+  protected _getMatch(matchId: MatchId): Match | undefined {
+    const { set, ...mId } = matchId
+    return this.matchIndex.get(idToString(mId)) || this.matches.find((match) => compatibleIds(mId, match.id))
+  }
 
-  /**
-   * This method is called from score() when a set is complete.
-   * It saves the contribution of each player (not team) in the set to the setContribCache, so that it can be
-   * used later to update telemetry or progress the tournament without parsing all the matches again.
-   * @param setId The ID of the set to save
-   * @param match The match containing the set to save
-   */
-  protected abstract updateSetCache(setId: SetId, match: Match): void
-
-  /**
-   * This method is called from progress() when a match is complete.
-   * It saves the contribution of each opponent (player or team) in the match to the matchContribCache, so that it can be
-   * used later to update telemetry or progress the tournament without parsing all the matches again.
-   * @param match The match to save
-   */
-  protected abstract updateMatchCache(match: Match): void
-
-  /**
-   * Updates the telemetry for the opponents in PhaseBase.opponentsToUpdateTelemetry
-   *
-   */
-  protected abstract updatePlayersTelemetry(): void
+  protected _getMatches(filter?: Partial<MatchId>): Match[] {
+    return this.matches.filter((match) => !filter || compatibleIds(filter, match.id))
+  }
 }
