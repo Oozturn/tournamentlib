@@ -30,3 +30,8 @@ schema: spec-driven
 #     archive:
 #       guidance:
 #         - Summarize the archive outcome before finishing
+
+
+rules:
+  tasks:
+    - Every implementation sub-task must be preceded by a sub-task that writes a failing test for it (strict TDD ordering: test first, then the implementation that makes it pass
