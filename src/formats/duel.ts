@@ -1,5 +1,5 @@
 ﻿import { PhaseBase } from "../phase"
-import { computeScoreRatio, idToString, newMatch } from "../tools"
+import { computeScoreRatio, idToString, isTeamOpponent, newMatch } from "../tools"
 import {
   Match,
   MatchId,
@@ -9,7 +9,6 @@ import {
   PhaseBracket,
   PlayerOpponent,
   SetId,
-  TeamOpponent,
   type Opponent,
   type PhaseSettings,
   type TournamentPhase
@@ -48,6 +47,7 @@ export class DuelPhase extends PhaseBase {
     })
     this.progress()
   }
+
   protected validateSettings(settings: DuelSettings, opponents: Opponent[]): void {
     super.validateSettings(settings, opponents)
     if (settings.elimination !== "single" && settings.elimination !== "double") {
@@ -165,6 +165,7 @@ export class DuelPhase extends PhaseBase {
       )
     }
   }
+
   protected indexMatches(): void {
     super.indexMatches()
     // Link matches for progression (parentMatches and childrenMatches)
@@ -247,6 +248,7 @@ export class DuelPhase extends PhaseBase {
     // winner from LB always bottom in odd rounds, otherwise normal progression
     return { matchId: targetId, index: round % 2 == 1 ? 1 : (match + 1) % 2 }
   }
+
   // Find the match Id for the looser
   private down(matchId: MatchId): { matchId: MatchId; index: number } | null {
     const { bracket, round, match } = matchId
@@ -321,10 +323,12 @@ export class DuelPhase extends PhaseBase {
       index: 0
     }
   }
+
   private getParentMatches(matchId: MatchId): Match[] {
     const parentIds = this.parentMatches.get(idToString(matchId)) || []
     return parentIds.map((parentId) => this._getMatch(parentId)).filter((m) => m !== undefined)
   }
+
   private getChildrenMatches(matchId: MatchId): Record<"right" | "down", { match: Match; index: number } | null> {
     const children = this.childrenMatches.get(idToString(matchId)) || { right: null, down: null }
     return {
@@ -380,6 +384,7 @@ export class DuelPhase extends PhaseBase {
       match.locked = true
     }
   }
+
   protected unlockMatch(match: Match): void {
     const { right, down } = this.getChildrenMatches(match.id)
 
@@ -407,6 +412,7 @@ export class DuelPhase extends PhaseBase {
     }
     return false
   }
+
   protected progress(): void {
     while (this.matchesToProgress.size) {
       const nextId = this.matchesToProgress.values().next().value!
@@ -429,23 +435,24 @@ export class DuelPhase extends PhaseBase {
         this.updateMatchCache(matchToProgress)
       }
       if (winnerId) {
-        if (matchToProgress.opponents.find((o) => o?.id === winnerId && o?.type === "team")) {
-          const team = matchToProgress.opponents.find((o) => o?.id === winnerId) as TeamOpponent
-          team.players.forEach((player) => this.playersToUpdateTelemetry.add(player.id))
+        const winner = matchToProgress.opponents.find((o) => o?.id === winnerId)
+        if (winner && isTeamOpponent(winner)) {
+          winner.players.forEach((player) => this.playersToUpdateTelemetry.add(player.id))
         } else {
           this.playersToUpdateTelemetry.add(winnerId)
         }
       }
       if (loserId) {
-        if (matchToProgress.opponents.find((o) => o?.id === loserId && o?.type === "team")) {
-          const team = matchToProgress.opponents.find((o) => o?.id === loserId) as TeamOpponent
-          team.players.forEach((player) => this.playersToUpdateTelemetry.add(player.id))
+        const loser = matchToProgress.opponents.find((o) => o?.id === loserId)
+        if (loser && isTeamOpponent(loser)) {
+          loser.players.forEach((player) => this.playersToUpdateTelemetry.add(player.id))
         } else {
           this.playersToUpdateTelemetry.add(loserId)
         }
       }
     }
   }
+
   /**
    * Progress a ff match.
    * One or both of the opponents are ff, so the match is complete as long as all opponents are present.
@@ -492,6 +499,7 @@ export class DuelPhase extends PhaseBase {
 
     return { winnerId: winner.id, loserId: ff.id }
   }
+
   /**
    * Progress an incomplete match.
    * This concerns matches that just start and complete matches where a score has been removed.
@@ -527,6 +535,7 @@ export class DuelPhase extends PhaseBase {
       })
     }
   }
+
   /**
    * Progress a complete match.
    */
@@ -569,6 +578,7 @@ export class DuelPhase extends PhaseBase {
     })
     return { winnerId, loserId }
   }
+
   /**
    * Progress a grand final 1 match and decide if a GF2 is needed.
    */
@@ -643,7 +653,7 @@ export class DuelPhase extends PhaseBase {
 
       const inverted = this.settings.invertedScoring
       let scored = set.scores[o.id]!
-      let conceded = Object.entries(set.scores).filter(([id, s]) => id !== o.id)[0]![1]
+      let conceded = Object.entries(set.scores).filter(([id, _s]) => id !== o.id)[0]![1]
       if (inverted) {
         const tmp = scored
         scored = conceded
@@ -651,15 +661,16 @@ export class DuelPhase extends PhaseBase {
       }
       const ratioPoints = computeScoreRatio(scored, conceded)
 
-      if (o.type === "player") {
-        updatePlayerCache(o.id, o.forfeit, { scored, conceded, ratioPoints })
-      } else {
-        return (o as TeamOpponent).players.forEach((p) => {
+      if (isTeamOpponent(o)) {
+        return o.players.forEach((p) => {
           updatePlayerCache(p.id, p.forfeit, { scored, conceded, ratioPoints })
         })
+      } else {
+        updatePlayerCache(o.id, o.forfeit, { scored, conceded, ratioPoints })
       }
     })
   }
+
   protected updateMatchCache(match: Match): void {
     if (!match.complete) {
       if (this.matchContribCache[idToString(match.id)]) {
@@ -698,6 +709,7 @@ export class DuelPhase extends PhaseBase {
       })
     })
   }
+
   protected updatePlayersTelemetry(): void {
     while (this.playersToUpdateTelemetry.size) {
       const nextPlayerId = this.playersToUpdateTelemetry.values().next().value!
