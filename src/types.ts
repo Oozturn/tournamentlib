@@ -69,22 +69,28 @@ export interface Match {
 // Phase
 /////////////////////////////////////////////
 
-export type PhaseType = "duel" | "ffa" | "roundrobin"
+export const PHASE_TYPES = ["duel", "ffa", "roundrobin"] as const
+export type PhaseType = (typeof PHASE_TYPES)[number]
+
+export const MATCH_WIN_RULES = ["bestOfN", "sumOfSets"] as const
+export type MatchWinRule = (typeof MATCH_WIN_RULES)[number]
 
 /**
  * Phase settings, used to configure the phase.
- * - type: Phase type (duel, ffa, roundrobin)
+ * - type: Phase type (one of PHASE_TYPES)
  * - invertedScoring: Whether the scoring is inverted. Default false
- * - matchSets: Array of sets for each round of the phase (starting from the final round down to the start). Default [1]
+ * - nbMatchSets: Required. Number of sets per round, as positive integers. Values line up from the end: the last value
+ *   is the final round, and earlier rounds without a value default to 1. With allMatchesSameSetsNumber, every round
+ *   uses the first value instead.
  * - allMatchesSameSetsNumber: Whether all matches have the same number of sets. Default true
- * - matchWinRule: Rule to determine the winner of a match. Default 'bestOfN'
+ * - matchWinRule: Required. Rule to determine the winner of a match (one of MATCH_WIN_RULES)
  */
 export interface PhaseSettings {
   type: PhaseType
   invertedScoring: boolean
   nbMatchSets: number[]
   allMatchesSameSetsNumber: boolean
-  matchWinRule: "bestOfN" | "sumOfSets"
+  matchWinRule: MatchWinRule
   ffPlayerScoreAgainst: number
 }
 

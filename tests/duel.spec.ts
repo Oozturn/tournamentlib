@@ -1,4 +1,14 @@
-﻿import { DuelPhase, DuelSettings, PhaseBracket, PlayerOpponent, TeamOpponent, TournamentPhase } from "../src"
+﻿import {
+  DuelPhase,
+  DuelSettings,
+  MATCH_WIN_RULES,
+  Opponent,
+  PHASE_TYPES,
+  PhaseBracket,
+  PlayerOpponent,
+  TeamOpponent,
+  TournamentPhase
+} from "../src"
 const W = PhaseBracket.winner
 const L = PhaseBracket.loser
 const F = TournamentPhase.Final
@@ -137,9 +147,67 @@ describe("Duel phase structure and graph", () => {
     test("Correct double elimination Duel", () => {
       expect(() => newDuel(4, false, { ...duelBaseSettings, elimination: "double" })).not.toThrow()
     })
+
+    const initWith = (opponents: Opponent[]) => () => new DuelPhase(F).init(opponents, duelBaseSettings)
+    const mixedError = "validateOpponents: opponents must be either all players or all teams."
+    const emptyTeamError = "validateOpponents: every team must have at least one player."
+    const emptyIdError = "validateOpponents: opponent ids must not be empty."
+    const unicityError = "validateOpponents: unicity in opponents id is not respected."
+
+    test("Mixed players and teams", () => {
+      const player = createPlayers(2)[1]!
+      const team = createTeams(1, 1)[0]!
+      expect(initWith([player, team])).toThrow(mixedError)
+      expect(initWith([team, player])).toThrow(mixedError)
+    })
+    test("Team without players", () => {
+      const [team1, team2] = createTeams(2, 1)
+      expect(initWith([{ ...team1!, players: [] }, team2!])).toThrow(emptyTeamError)
+      expect(initWith(createTeams(2, 0))).toThrow(emptyTeamError)
+    })
+    test("Empty ids", () => {
+      const [player1, player2] = createPlayers(2)
+      const [team1, team2] = createTeams(2, 2)
+      const [teamPlayer, otherTeamPlayer] = team1!.players
+      expect(initWith([{ ...player1!, id: "" }, player2!])).toThrow(emptyIdError)
+      expect(initWith([{ ...team1!, id: "" }, team2!])).toThrow(emptyIdError)
+      expect(initWith([{ ...team1!, players: [{ ...teamPlayer!, id: "" }, otherTeamPlayer!] }, team2!])).toThrow(
+        emptyIdError
+      )
+    })
+    test("Several empty ids report the empty id, not the unicity", () => {
+      const players = createPlayers(2).map((p) => ({ ...p, id: "" }))
+      expect(initWith(players)).toThrow(emptyIdError)
+    })
+    test("Duplicate team IDs", () => {
+      const teams = createTeams(2, 1).map((t) => ({ ...t, id: "a" }))
+      expect(initWith(teams)).toThrow(unicityError)
+    })
+    test("Duplicate player IDs within a team", () => {
+      const [team1, team2] = createTeams(2, 2)
+      const players = team1!.players.map((p) => ({ ...p, id: "a" }))
+      expect(initWith([{ ...team1!, players }, team2!])).toThrow(unicityError)
+    })
+    test("Player with the ID of a team", () => {
+      const [team1, team2] = createTeams(2, 1)
+      const players = team1!.players.map((p) => ({ ...p, id: team2!.id }))
+      expect(initWith([{ ...team1!, players }, team2!])).toThrow(unicityError)
+    })
+    test("Only players or only teams", () => {
+      expect(initWith(createPlayers(4))).not.toThrow()
+      expect(initWith(createTeams(4, 2))).not.toThrow()
+    })
+    test("Generated walkovers keep their empty id", () => {
+      const firstRound = newDuel(3).getMatches({ bracket: W, round: 1 })
+      expect(firstRound.flatMap((m) => m.opponents.map((o) => o?.id))).toContain("")
+    })
   })
 
   describe("Phase common settings validation", () => {
+    test("Accepted values are exported", () => {
+      expect(PHASE_TYPES).toEqual(["duel", "ffa", "roundrobin"])
+      expect(MATCH_WIN_RULES).toEqual(["bestOfN", "sumOfSets"])
+    })
     test("Empty nbMatchSets", () =>
       expect(() => newDuel(2, false, { ...duelBaseSettings, nbMatchSets: [] })).toThrow(
         "validateSettings: nbMatchSets must not be empty."
@@ -151,14 +219,51 @@ describe("Duel phase structure and graph", () => {
       expect(() => newDuel(2, false, { ...duelBaseSettings, nbMatchSets: [0, 2] })).toThrow(
         "validateSettings: all nbMatchSets must be greater than 0."
       )
-      expect(() => newDuel(2, false, { ...duelBaseSettings, nbMatchSets: ["1"] } as unknown as DuelSettings)).toThrow(
-        "validateSettings: all nbMatchSets must be numbers."
+    })
+    test.each<[string, unknown]>([
+      ["1.5", 1.5],
+      ["NaN", NaN],
+      ["Infinity", Infinity],
+      ['"1"', "1"],
+      ['new String("1")', new String("1")],
+      ["true", true],
+      ["null", null],
+      ["undefined", undefined]
+    ])("Non-integer nbMatchSets: %s", (_name, value) => {
+      expect(() => newDuel(2, false, { nbMatchSets: [value] } as unknown as DuelSettings)).toThrow(
+        "validateSettings: all nbMatchSets must be integers."
+      )
+    })
+    test("Positive integers in nbMatchSets", () => {
+      expect(() => newDuel(2, false, { nbMatchSets: [1, 3, 5] })).not.toThrow()
+    })
+    test("Invalid type", () => {
+      expect(() => newDuel(2, false, { type: "invalid" } as unknown as DuelSettings)).toThrow(
+        "validateSettings: type must be one of duel, ffa, roundrobin."
       )
     })
     test("Invalid matchWinRule", () => {
       expect(() =>
         newDuel(2, false, { ...duelBaseSettings, matchWinRule: "invalid" } as unknown as DuelSettings)
-      ).toThrow('validateSettings: matchWinRule must be either "bestOfN" or "sumOfSets".')
+      ).toThrow("validateSettings: matchWinRule must be one of bestOfN, sumOfSets.")
+    })
+
+    describe("allMatchesSameSetsNumber", () => {
+      const setsPerMatch = (duel: DuelPhase) => duel.getMatches().map((m) => m.sets.length)
+
+      test("Defaults to true when absent", () => {
+        const settings: Partial<DuelSettings> = { ...duelBaseSettings, nbMatchSets: [2, 3] }
+        delete settings.allMatchesSameSetsNumber
+        const duel = new DuelPhase(F)
+        duel.init(createPlayers(4), settings as DuelSettings)
+        expect(duel.settings.allMatchesSameSetsNumber).toBe(true)
+        expect(setsPerMatch(duel)).toEqual([2, 2, 2])
+      })
+      test("Keeps false when provided", () => {
+        const duel = newDuel(4, false, { nbMatchSets: [2, 3], allMatchesSameSetsNumber: false })
+        expect(duel.settings.allMatchesSameSetsNumber).toBe(false)
+        expect(setsPerMatch(duel)).toEqual([2, 2, 3])
+      })
     })
   })
 
@@ -468,6 +573,48 @@ describe("Duel phase scoring and progression", () => {
     })
   })
 
+  describe("Score validation", () => {
+    const finiteError = "Score must be a finite number"
+
+    test.each<[string, unknown]>([
+      ["NaN", NaN],
+      ["Infinity", Infinity],
+      ["-Infinity", -Infinity],
+      ['"3"', "3"],
+      ["null", null]
+    ])("Rejected score leaves the match unchanged: %s", (_name, value) => {
+      const duel = newDuel(4)
+      score(duel, W, 1, 1, 1, "4", 1)
+      const before = duel.getMatches()
+      expect(() => score(duel, W, 1, 1, 1, "1", value as number)).toThrow(finiteError)
+      expect(duel.getMatches()).toEqual(before)
+    })
+    test("An invalid score on a locked match reports the lock", () => {
+      const duel = newDuel(4)
+      play(duel, [
+        { b: W, r: 1, m: 1, p1: "1", p2: "4", sc1: 3, sc2: 1 },
+        { b: W, r: 1, m: 2, p1: "2", p2: "3", sc1: 3, sc2: 1 }
+      ])
+      score(duel, W, 2, 1, 1, "1", 3)
+      expect(() => score(duel, W, 1, 1, 1, "1", NaN)).toThrow("Match is locked")
+    })
+    test("An undefined score removes the score", () => {
+      const duel = newDuel(4)
+      score(duel, W, 1, 1, 1, "1", 3)
+      score(duel, W, 1, 1, 1, "1", undefined)
+      expect(duel.getMatch({ phase: F, bracket: W, round: 1, match: 1 })?.sets[0]?.scores).toEqual({})
+    })
+    test("Negative and decimal scores are accepted", () => {
+      const duel = newDuel(4)
+      score(duel, W, 1, 1, 1, "1", -1)
+      score(duel, W, 1, 1, 1, "4", 2.5)
+      expect(duel.getMatch({ phase: F, bracket: W, round: 1, match: 1 })?.sets[0]?.scores).toEqual({
+        "1": -1,
+        "4": 2.5
+      })
+    })
+  })
+
   describe("Duel results and completion", () => {
     test("Duel results - single elimination, no extended finals", () => {
       const duel = newDuel(4)
@@ -719,7 +866,7 @@ describe("Phase lifecycle", () => {
   })
 
   describe("Validation", () => {
-    test.each<[string, PlayerOpponent[], DuelSettings, string]>([
+    test.each<[string, Opponent[], DuelSettings, string]>([
       [
         "too few opponents",
         createPlayers(1),
@@ -743,6 +890,30 @@ describe("Phase lifecycle", () => {
         createPlayers(2),
         { ...duelBaseSettings, elimination: "double" },
         "validateSettings: double elimination requires at least 4 opponents."
+      ],
+      [
+        "mixed players and teams",
+        [createPlayers(2)[1]!, createTeams(1, 1)[0]!],
+        duelBaseSettings,
+        "validateOpponents: opponents must be either all players or all teams."
+      ],
+      [
+        "team without players",
+        createTeams(2, 0),
+        duelBaseSettings,
+        "validateOpponents: every team must have at least one player."
+      ],
+      [
+        "empty id",
+        createPlayers(2).map((p) => ({ ...p, id: "" })),
+        duelBaseSettings,
+        "validateOpponents: opponent ids must not be empty."
+      ],
+      [
+        "infinite nbMatchSets",
+        createPlayers(2),
+        { ...duelBaseSettings, nbMatchSets: [Infinity] },
+        "validateSettings: all nbMatchSets must be integers."
       ]
     ])("Rejected init leaves the phase empty: %s", (_name, opponents, settings, message) => {
       const duel = new DuelPhase(F)
@@ -757,6 +928,12 @@ describe("Phase lifecycle", () => {
       duel.init(createPlayers(4), duelBaseSettings)
       expect(duel.getMatches()).toHaveLength(3)
       expect(duel.getOpponents(true, true)).toHaveLength(4)
+    })
+    test("A valid init succeeds after rejecting an infinite nbMatchSets", () => {
+      const duel = new DuelPhase(F)
+      expect(() => duel.init(createPlayers(4), { ...duelBaseSettings, nbMatchSets: [Infinity] })).toThrow()
+      duel.init(createPlayers(4), duelBaseSettings)
+      expect(duel.getMatches()).toHaveLength(3)
     })
   })
 
