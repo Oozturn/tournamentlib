@@ -53,24 +53,6 @@ export class Tournament implements TournamentInterface {
     this.phases = {} as Record<TournamentPhase, Phase>
   }
 
-  private validateOpponents(opponents: Opponent[]): void {
-    if (opponents.length < 2) {
-      throw new Error(`validateOpponents: at least 2 opponents are required.`)
-    }
-    if (Array.from(new Set(opponents.map((o) => o.id))).length != opponents.length) {
-      throw new Error(`validateOpponents: unicity in opponents id is not respected.`)
-    }
-    if (this.useTeams) {
-      const ids = (opponents as TeamOpponent[]).flatMap((o) => [o.id, ...o.players.map((p) => p.id)])
-      if (Array.from(new Set(ids)).length != ids.length) {
-        throw new Error(`validateOpponents: unicity in opponents id is not respected.`)
-      }
-    }
-  }
-  private validateSettings(settings: TournamentSettings): void {
-    throw new Error(`validateSettings: net yet implemented.`)
-  }
-
   getCurrentPhase(): Phase | undefined {
     if (this.currentPhase) {
       return this.phases[this.currentPhase]
@@ -81,18 +63,9 @@ export class Tournament implements TournamentInterface {
   getResult(): Result[] {
     return this.resultsCache
   }
-  private updateResultsCache(): void {
-    // console.error(`updateResultsCache: not yet implemented.`)
-  }
+
   getCompletion(): number {
     return this.completion
-  }
-  private updateCompletion(): void {
-    const nbPhases = this.settings.phases.length
-    if (nbPhases === 0) return
-    let completion = 0
-    Object.values(this.phases).forEach((phase) => (completion += phase.getCompletion()))
-    this.completion = completion / nbPhases
   }
 
   getOpponents(includeForfeited: boolean = true): Opponent[] {
@@ -118,7 +91,7 @@ export class Tournament implements TournamentInterface {
     return Object.values(this.phases).flatMap((phase) => phase.getMatches(filter))
   }
 
-  startPhase(phase: TournamentPhase = TournamentPhase.Pool): void {
+  startPhase(_phase: TournamentPhase = TournamentPhase.Pool): void {
     throw new Error(`startPhase: not yet implemented.`)
   }
 
@@ -127,5 +100,36 @@ export class Tournament implements TournamentInterface {
     this.phases[this.currentPhase].score(setId, opponentId, score)
     this.updateResultsCache()
     this.updateCompletion()
+  }
+
+  private validateOpponents(opponents: Opponent[]): void {
+    if (opponents.length < 2) {
+      throw new Error(`validateOpponents: at least 2 opponents are required.`)
+    }
+    if (Array.from(new Set(opponents.map((o) => o.id))).length != opponents.length) {
+      throw new Error(`validateOpponents: unicity in opponents id is not respected.`)
+    }
+    if (this.useTeams) {
+      const ids = (opponents as TeamOpponent[]).flatMap((o) => [o.id, ...o.players.map((p) => p.id)])
+      if (Array.from(new Set(ids)).length != ids.length) {
+        throw new Error(`validateOpponents: unicity in opponents id is not respected.`)
+      }
+    }
+  }
+
+  private validateSettings(_settings: TournamentSettings): void {
+    throw new Error(`validateSettings: net yet implemented.`)
+  }
+
+  private updateResultsCache(): void {
+    // console.error(`updateResultsCache: not yet implemented.`)
+  }
+
+  private updateCompletion(): void {
+    const nbPhases = this.settings.phases.length
+    if (nbPhases === 0) return
+    let completion = 0
+    Object.values(this.phases).forEach((phase) => (completion += phase.getCompletion()))
+    this.completion = completion / nbPhases
   }
 }
