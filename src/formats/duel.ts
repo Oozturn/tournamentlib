@@ -37,11 +37,8 @@ export class DuelPhase extends PhaseBase {
   public init(opponents: Opponent[], settings: DuelSettings): void {
     super.init(opponents, settings)
     this.settings = {
-      ...settings,
-      nbMatchSets: [...settings.nbMatchSets],
-      nbLBMatchSets: settings.nbLBMatchSets ? [...settings.nbLBMatchSets] : undefined,
-      allMatchesSameSetsNumber: !!settings.allMatchesSameSetsNumber,
-      invertedScoring: !!settings.invertedScoring
+      ...this.settings,
+      nbLBMatchSets: settings.nbLBMatchSets ? [...settings.nbLBMatchSets] : undefined
     }
     this.generateMatches()
     this.indexMatches()

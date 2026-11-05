@@ -1,9 +1,10 @@
 import { compatibleIds, deepCopyMatch, deepCopyOpponents, idToString, isTeamOpponent, sameResults } from "./tools"
-import { PhaseType } from "./types"
+import { MATCH_WIN_RULES, PHASE_TYPES } from "./types"
 import type {
   Opponent,
   OpponentId,
   PhaseSettings,
+  PhaseType,
   Match,
   Result,
   SetId,
@@ -141,7 +142,7 @@ export abstract class PhaseBase implements Phase {
     this.settings = {
       ...settings,
       nbMatchSets: [...settings.nbMatchSets],
-      allMatchesSameSetsNumber: !!settings.allMatchesSameSetsNumber,
+      allMatchesSameSetsNumber: settings.allMatchesSameSetsNumber ?? true,
       invertedScoring: !!settings.invertedScoring
     }
   }
@@ -245,36 +246,37 @@ export abstract class PhaseBase implements Phase {
     if (opponents.length < 2) {
       throw new Error(`validateOpponents: at least 2 opponents are required.`)
     }
-    const uniqOpponents = new Set(opponents.map((o) => o.id))
-    if (Array.from(uniqOpponents).length != opponents.length) {
-      throw new Error(`validateOpponents: unicity in opponents id is not respected.`)
+    const teams = opponents.filter(isTeamOpponent)
+    if (teams.length !== 0 && teams.length !== opponents.length) {
+      throw new Error(`validateOpponents: opponents must be either all players or all teams.`)
     }
-    if (opponents[0]!.type === "team") {
-      ;(opponents as TeamOpponent[]).flatMap((t) => t.players.map((p) => p.id)).forEach((id) => uniqOpponents.add(id))
-      if (
-        Array.from(uniqOpponents).length !=
-        opponents.length + (opponents as TeamOpponent[]).flatMap((t) => t.players.map((p) => p.id)).length
-      ) {
-        throw new Error(`validateOpponents: unicity in opponents id is not respected.`)
-      }
+    if (teams.some((t) => t.players.length === 0)) {
+      throw new Error(`validateOpponents: every team must have at least one player.`)
+    }
+    const ids = [...opponents.map((o) => o.id), ...teams.flatMap((t) => t.players.map((p) => p.id))]
+    if (ids.includes("")) {
+      throw new Error(`validateOpponents: opponent ids must not be empty.`)
+    }
+    if (new Set(ids).size !== ids.length) {
+      throw new Error(`validateOpponents: unicity in opponents id is not respected.`)
     }
   }
 
   protected validateSettings(settings: PhaseSettings, _opponents: Opponent[]): void {
-    if (!["duel", "ffa", "roundrobin"].includes(settings.type)) {
-      throw new Error(`validateSettings: type must be one of 'duel', 'ffa' or 'roundrobin'.`)
+    if (!PHASE_TYPES.includes(settings.type)) {
+      throw new Error(`validateSettings: type must be one of ${PHASE_TYPES.join(", ")}.`)
     }
     if (settings.nbMatchSets.length === 0) {
       throw new Error(`validateSettings: nbMatchSets must not be empty.`)
     }
-    if (settings.nbMatchSets.some((set) => typeof set === "string" || (set as unknown) instanceof String)) {
-      throw new Error(`validateSettings: all nbMatchSets must be numbers.`)
+    if (settings.nbMatchSets.some((set) => !Number.isInteger(set))) {
+      throw new Error(`validateSettings: all nbMatchSets must be integers.`)
     }
     if (settings.nbMatchSets.some((set) => set <= 0)) {
       throw new Error(`validateSettings: all nbMatchSets must be greater than 0.`)
     }
-    if (!["bestOfN", "sumOfSets"].includes(settings.matchWinRule)) {
-      throw new Error(`validateSettings: matchWinRule must be either "bestOfN" or "sumOfSets".`)
+    if (!MATCH_WIN_RULES.includes(settings.matchWinRule)) {
+      throw new Error(`validateSettings: matchWinRule must be one of ${MATCH_WIN_RULES.join(", ")}.`)
     }
   }
 
@@ -331,7 +333,7 @@ export abstract class PhaseBase implements Phase {
    * @param score The score to set, or undefined to remove the score
    * @returns A string explaining why the score is impossible, or nothing if it is possible
    */
-  protected notScorable(setId: SetId, opponentId: OpponentId, _score: number | undefined): string | void {
+  protected notScorable(setId: SetId, opponentId: OpponentId, score: number | undefined): string | void {
     const match = this._getMatch(setId)
     if (!match) {
       return `Match not found`
@@ -347,6 +349,9 @@ export abstract class PhaseBase implements Phase {
     }
     if (match?.locked) {
       return "Match is locked"
+    }
+    if (score !== undefined && !Number.isFinite(score)) {
+      return "Score must be a finite number"
     }
     // Additional checks can be implemented in subclasses
   }
