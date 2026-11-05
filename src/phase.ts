@@ -20,6 +20,14 @@ export interface Phase {
   readonly type: PhaseType
   readonly settings: PhaseSettings
 
+  /**
+   * Initializes the phase with its opponents and settings: validates and copies them, generates the matches and
+   * progresses the walkovers. It can only succeed once: any later call throws, while a call rejected by validation
+   * leaves the phase empty and can be retried.
+   * Until then, `settings` is `undefined` despite its type, reads return empty values, and `score` and `toggleForfeit` throw.
+   */
+  init(opponents: Opponent[], settings: PhaseSettings): void
+
   /** Returns the current ranking of the phase, one entry per player, sorted by rank. */
   getResult(): Result[]
   /** Returns the phase completion ratio, from 0 (no match complete) to 1 (all matches complete). */
@@ -51,8 +59,9 @@ export interface Phase {
 
 export abstract class PhaseBase implements Phase {
   readonly type: PhaseType
-  readonly settings: PhaseSettings
+  settings!: PhaseSettings
   readonly tournamentPhase: TournamentPhase
+  private initialized: boolean = false
   protected matches: Match[] = []
   protected opponents: Opponent[] = []
   protected players: PlayerOpponent[] = []
@@ -71,33 +80,13 @@ export abstract class PhaseBase implements Phase {
 
   protected matchIndex: Map<matchIdString, Match> = new Map()
 
-  constructor(type: PhaseType, tournamentPhase: TournamentPhase, opponents: Opponent[], settings: PhaseSettings) {
-    this.validateOpponents(opponents)
-    this.validateSettings(settings, opponents)
+  constructor(type: PhaseType, tournamentPhase: TournamentPhase) {
     this.type = type
     this.tournamentPhase = tournamentPhase
-    this.opponents = deepCopyOpponents(opponents).filter((o) => o !== undefined)
-    this.opponents.forEach((opponent) => {
-      if (isTeamOpponent(opponent)) {
-        this.players.push(...opponent.players)
-        opponent.players.forEach((p) => this.teamOfPlayers.set(p.id, opponent))
-      } else {
-        this.players.push(opponent as PlayerOpponent)
-      }
-    })
-    this.settings = {
-      ...settings,
-      nbMatchSets: [...settings.nbMatchSets],
-      allMatchesSameSetsNumber: !!settings.allMatchesSameSetsNumber,
-      invertedScoring: !!settings.invertedScoring
-    }
-    // In sub classes, call these:
-    // this.generateMatches()
-    // this.indexMatches()
   }
 
   /**
-   * This method is called in the constructor of the subclasses to generate the matches for the phase.
+   * This method is called in init() of the subclasses to generate the matches for the phase.
    * It is up to the subclass to implement the logic for generating matches, as it depends on the phase type.
    * After generating matches, the subclass should call indexMatches() to ensure the match index is up to date.
    */
@@ -132,6 +121,30 @@ export abstract class PhaseBase implements Phase {
    *
    */
   protected abstract updatePlayersTelemetry(): void
+
+  public init(opponents: Opponent[], settings: PhaseSettings): void {
+    if (this.initialized) {
+      throw new Error(`init: phase is already initialized.`)
+    }
+    this.validateOpponents(opponents)
+    this.validateSettings(settings, opponents)
+    this.initialized = true
+    this.opponents = deepCopyOpponents(opponents).filter((o) => o !== undefined)
+    this.opponents.forEach((opponent) => {
+      if (isTeamOpponent(opponent)) {
+        this.players.push(...opponent.players)
+        opponent.players.forEach((p) => this.teamOfPlayers.set(p.id, opponent))
+      } else {
+        this.players.push(opponent as PlayerOpponent)
+      }
+    })
+    this.settings = {
+      ...settings,
+      nbMatchSets: [...settings.nbMatchSets],
+      allMatchesSameSetsNumber: !!settings.allMatchesSameSetsNumber,
+      invertedScoring: !!settings.invertedScoring
+    }
+  }
 
   public getResult(): Result[] {
     return this.resultsCache.map((r) => ({ ...r, telemetry: { ...r.telemetry } }))
