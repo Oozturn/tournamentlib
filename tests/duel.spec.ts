@@ -2,7 +2,6 @@
 const W = PhaseBracket.winner
 const L = PhaseBracket.loser
 const F = TournamentPhase.Final
-const P = TournamentPhase.Pool
 
 function createPlayers(nb: number): PlayerOpponent[] {
   return Array.from({ length: nb }, (_, index) => ({
@@ -48,7 +47,9 @@ const duelBaseSettings: DuelSettings = {
 }
 function newDuel(nbOpponents: number, teams: boolean = false, settings?: Partial<DuelSettings>): DuelPhase {
   const opponents = teams ? createTeams(nbOpponents, 2) : createPlayers(nbOpponents)
-  return new DuelPhase(F, opponents, { ...duelBaseSettings, ...settings })
+  const duel = new DuelPhase(F)
+  duel.init(opponents, { ...duelBaseSettings, ...settings })
+  return duel
 }
 type Step = {
   b: PhaseBracket
@@ -112,7 +113,8 @@ describe("Duel phase structure and graph", () => {
 
     test("Duplicate player IDs", () => {
       const players = createPlayers(2).map((p) => ({ ...p, id: "a" }))
-      expect(() => new DuelPhase(F, players, duelBaseSettings)).toThrow(
+      const duel = new DuelPhase(F)
+      expect(() => duel.init(players, duelBaseSettings)).toThrow(
         "validateOpponents: unicity in opponents id is not respected."
       )
     })
@@ -121,7 +123,8 @@ describe("Duel phase structure and graph", () => {
         ...t,
         players: t.players.map((p, index) => ({ ...p, id: `${index + 1}` }))
       }))
-      expect(() => new DuelPhase(F, teams, duelBaseSettings)).toThrow(
+      const duel = new DuelPhase(F)
+      expect(() => duel.init(teams, duelBaseSettings)).toThrow(
         "validateOpponents: unicity in opponents id is not respected."
       )
     })
@@ -651,6 +654,159 @@ describe("Duel phase scoring and progression", () => {
         concededPoints: 1,
         ratioPoints: ((8 - 1) / (8 + 1) + 1) / 2
       })
+    })
+  })
+})
+
+describe("Phase lifecycle", () => {
+  const firstMatch = { phase: F, bracket: W, round: 1, match: 1 }
+
+  describe("Initialization", () => {
+    test("A phase can be created without opponents or settings", () => {
+      const duel = new DuelPhase(F)
+      expect(duel.getMatches()).toEqual([])
+    })
+    test("init generates the matches", () => {
+      const duel = new DuelPhase(F)
+      duel.init(createPlayers(4), duelBaseSettings)
+      expect(duel.getMatches()).toHaveLength(3)
+      duel.getMatches({ bracket: W, round: 1 }).forEach((m) => {
+        expect(m.opponents.every((o) => o !== undefined)).toBe(true)
+      })
+    })
+    test("init progresses the walkovers", () => {
+      const duel = new DuelPhase(F)
+      duel.init(createPlayers(3), duelBaseSettings)
+      expect(duel.getMatch({ phase: F, bracket: W, round: 2, match: 1 })?.opponents[0]?.id).toBe("1")
+    })
+  })
+
+  describe("Isolation", () => {
+    test("Changing the caller's players after init doesn't change the phase", () => {
+      const players = createPlayers(4)
+      const duel = new DuelPhase(F)
+      duel.init(players, duelBaseSettings)
+      const before = duel.getOpponents(true, false)
+
+      players[0]!.forfeit = true
+      players[0]!.stats.matchesWon = 99
+      players.pop()
+
+      expect(duel.getOpponents(true, false)).toEqual(before)
+    })
+    test("Changing the caller's teams after init doesn't change the phase", () => {
+      const teams = createTeams(4, 2)
+      const duel = new DuelPhase(F)
+      duel.init(teams, duelBaseSettings)
+      const before = duel.getOpponents(true, true)
+
+      teams[0]!.players[0]!.forfeit = true
+
+      expect(duel.getOpponents(true, true)).toEqual(before)
+    })
+    test("Changing the caller's settings after init doesn't change the phase", () => {
+      const settings: DuelSettings = { ...duelBaseSettings, nbMatchSets: [1], nbLBMatchSets: [1] }
+      const duel = new DuelPhase(F)
+      duel.init(createPlayers(4), settings)
+      const before = structuredClone(duel.settings)
+
+      settings.elimination = "double"
+      settings.nbMatchSets.push(3)
+      settings.nbLBMatchSets!.push(3)
+
+      expect(duel.settings).toEqual(before)
+    })
+  })
+
+  describe("Validation", () => {
+    test.each<[string, PlayerOpponent[], DuelSettings, string]>([
+      [
+        "too few opponents",
+        createPlayers(1),
+        duelBaseSettings,
+        "validateOpponents: at least 2 opponents are required."
+      ],
+      [
+        "duplicate ids",
+        createPlayers(2).map((p) => ({ ...p, id: "a" })),
+        duelBaseSettings,
+        "validateOpponents: unicity in opponents id is not respected."
+      ],
+      [
+        "invalid common settings",
+        createPlayers(2),
+        { ...duelBaseSettings, nbMatchSets: [] },
+        "validateSettings: nbMatchSets must not be empty."
+      ],
+      [
+        "invalid duel settings",
+        createPlayers(2),
+        { ...duelBaseSettings, elimination: "double" },
+        "validateSettings: double elimination requires at least 4 opponents."
+      ]
+    ])("Rejected init leaves the phase empty: %s", (_name, opponents, settings, message) => {
+      const duel = new DuelPhase(F)
+      expect(() => duel.init(opponents, settings)).toThrow(message)
+      expect(duel.getMatches()).toEqual([])
+      expect(duel.getOpponents(true, false)).toEqual([])
+      expect(duel.settings).toBeUndefined()
+    })
+    test("A valid init succeeds after a rejected one", () => {
+      const duel = new DuelPhase(F)
+      expect(() => duel.init(createPlayers(1), duelBaseSettings)).toThrow()
+      duel.init(createPlayers(4), duelBaseSettings)
+      expect(duel.getMatches()).toHaveLength(3)
+      expect(duel.getOpponents(true, true)).toHaveLength(4)
+    })
+  })
+
+  describe("Single initialization", () => {
+    const alreadyInitialized = "init: phase is already initialized."
+    const startedDuel = () => {
+      const duel = newDuel(4)
+      play(duel, [{ b: W, r: 1, m: 1, p1: "1", p2: "4", sc1: 3, sc2: 1 }])
+      return duel
+    }
+    const snapshot = (duel: DuelPhase) => ({
+      matches: duel.getMatches(),
+      opponents: duel.getOpponents(true, false),
+      completion: duel.getCompletion(),
+      result: duel.getResult()
+    })
+
+    test("A second valid init throws and leaves the phase unchanged", () => {
+      const duel = startedDuel()
+      const before = snapshot(duel)
+      expect(before.completion).toBeGreaterThan(0)
+      expect(() => duel.init(createPlayers(8), duelBaseSettings)).toThrow(alreadyInitialized)
+      expect(snapshot(duel)).toEqual(before)
+    })
+    test("A second invalid init throws the same error, not a validation error", () => {
+      const duel = startedDuel()
+      const before = snapshot(duel)
+      expect(() => duel.init(createPlayers(1), duelBaseSettings)).toThrow(alreadyInitialized)
+      expect(snapshot(duel)).toEqual(before)
+    })
+  })
+
+  describe("Before init", () => {
+    test("Reads return empty values", () => {
+      const duel = new DuelPhase(F)
+      expect(duel.getMatches()).toEqual([])
+      expect(duel.getMatch(firstMatch)).toBeUndefined()
+      expect(duel.getOpponents(true, false)).toEqual([])
+      expect(duel.getOpponents(true, true)).toEqual([])
+      expect(duel.getResult()).toEqual([])
+      expect(duel.getCompletion()).toBe(0)
+      expect(duel.settings).toBeUndefined()
+    })
+    test("score throws", () => {
+      const duel = new DuelPhase(F)
+      expect(() => duel.score({ ...firstMatch, set: 1 }, "1", 3)).toThrow("Match not found")
+    })
+    test("toggleForfeit throws", () => {
+      const duel = new DuelPhase(F)
+      expect(() => duel.toggleForfeit("1")).toThrow("toggleForfeit: opponent 1 not found.")
     })
   })
 })

@@ -23,13 +23,19 @@ export interface DuelSettings extends PhaseSettings {
 }
 
 export class DuelPhase extends PhaseBase {
-  readonly settings: DuelSettings
+  declare settings: DuelSettings
   private bracketPower: number = 0
   protected parentMatches: Map<matchIdString, MatchId[]>
   protected childrenMatches: Map<matchIdString, Record<"right" | "down", { matchId: MatchId; index: number } | null>>
 
-  constructor(tournamentPhase: TournamentPhase, opponents: Opponent[], settings: DuelSettings) {
-    super("duel", tournamentPhase, opponents, settings)
+  constructor(tournamentPhase: TournamentPhase) {
+    super("duel", tournamentPhase)
+    this.parentMatches = new Map()
+    this.childrenMatches = new Map()
+  }
+
+  public init(opponents: Opponent[], settings: DuelSettings): void {
+    super.init(opponents, settings)
     this.settings = {
       ...settings,
       nbMatchSets: [...settings.nbMatchSets],
@@ -37,8 +43,6 @@ export class DuelPhase extends PhaseBase {
       allMatchesSameSetsNumber: !!settings.allMatchesSameSetsNumber,
       invertedScoring: !!settings.invertedScoring
     }
-    this.parentMatches = new Map()
-    this.childrenMatches = new Map()
     this.generateMatches()
     this.indexMatches()
     // Progress WO matches
