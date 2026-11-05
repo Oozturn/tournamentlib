@@ -1,6 +1,15 @@
-import { compatibleIds, deepCopyMatch, deepCopyOpponents, idToString, isTeamOpponent, sameResults } from "./tools"
+import {
+  compatibleIds,
+  deepCopyMatch,
+  deepCopyOpponents,
+  idToString,
+  isTeamOpponent,
+  newOpponents,
+  sameResults
+} from "./tools"
 import { MATCH_WIN_RULES, PHASE_TYPES } from "./types"
 import type {
+  Entrants,
   Opponent,
   OpponentId,
   PhaseSettings,
@@ -22,12 +31,14 @@ export interface Phase {
   readonly settings: PhaseSettings
 
   /**
-   * Initializes the phase with its opponents and settings: validates and copies them, generates the matches and
-   * progresses the walkovers. It can only succeed once: any later call throws, while a call rejected by validation
+   * Initializes the phase with its entrants and settings: validates them, creates an opponent from each entrant's
+   * declared fields (without forfeit and with zeroed stats, undeclared fields being ignored), copies the settings,
+   * generates the matches and progresses the walkovers. To declare a forfeit before the phase starts, call
+   * `toggleForfeit` after `init`. It can only succeed once: any later call throws, while a call rejected by validation
    * leaves the phase empty and can be retried.
    * Until then, `settings` is `undefined` despite its type, reads return empty values, and `score` and `toggleForfeit` throw.
    */
-  init(opponents: Opponent[], settings: PhaseSettings): void
+  init(entrants: Entrants, settings: PhaseSettings): void
 
   /** Returns the current ranking of the phase, one entry per player, sorted by rank. */
   getResult(): Result[]
@@ -123,20 +134,20 @@ export abstract class PhaseBase implements Phase {
    */
   protected abstract updatePlayersTelemetry(): void
 
-  public init(opponents: Opponent[], settings: PhaseSettings): void {
+  public init(entrants: Entrants, settings: PhaseSettings): void {
     if (this.initialized) {
       throw new Error(`init: phase is already initialized.`)
     }
-    this.validateOpponents(opponents)
-    this.validateSettings(settings, opponents)
+    this.validateEntrants(entrants)
+    this.validateSettings(settings, entrants)
     this.initialized = true
-    this.opponents = deepCopyOpponents(opponents).filter((o) => o !== undefined)
+    this.opponents = newOpponents(entrants)
     this.opponents.forEach((opponent) => {
       if (isTeamOpponent(opponent)) {
         this.players.push(...opponent.players)
         opponent.players.forEach((p) => this.teamOfPlayers.set(p.id, opponent))
       } else {
-        this.players.push(opponent as PlayerOpponent)
+        this.players.push(opponent)
       }
     })
     this.settings = {
@@ -242,27 +253,27 @@ export abstract class PhaseBase implements Phase {
     this.updateResultsCache()
   }
 
-  protected validateOpponents(opponents: Opponent[]): void {
-    if (opponents.length < 2) {
-      throw new Error(`validateOpponents: at least 2 opponents are required.`)
+  protected validateEntrants(entrants: Entrants): void {
+    if (entrants.length < 2) {
+      throw new Error(`validateEntrants: at least 2 entrants are required.`)
     }
-    const teams = opponents.filter(isTeamOpponent)
-    if (teams.length !== 0 && teams.length !== opponents.length) {
-      throw new Error(`validateOpponents: opponents must be either all players or all teams.`)
+    const teams = entrants.filter((e) => e.type === "team")
+    if (teams.length !== 0 && teams.length !== entrants.length) {
+      throw new Error(`validateEntrants: entrants must be either all players or all teams.`)
     }
     if (teams.some((t) => t.players.length === 0)) {
-      throw new Error(`validateOpponents: every team must have at least one player.`)
+      throw new Error(`validateEntrants: every team must have at least one player.`)
     }
-    const ids = [...opponents.map((o) => o.id), ...teams.flatMap((t) => t.players.map((p) => p.id))]
+    const ids = [...entrants.map((e) => e.id), ...teams.flatMap((t) => t.players.map((p) => p.id))]
     if (ids.includes("")) {
-      throw new Error(`validateOpponents: opponent ids must not be empty.`)
+      throw new Error(`validateEntrants: entrant ids must not be empty.`)
     }
     if (new Set(ids).size !== ids.length) {
-      throw new Error(`validateOpponents: unicity in opponents id is not respected.`)
+      throw new Error(`validateEntrants: unicity in entrants id is not respected.`)
     }
   }
 
-  protected validateSettings(settings: PhaseSettings, _opponents: Opponent[]): void {
+  protected validateSettings(settings: PhaseSettings, _entrants: Entrants): void {
     if (!PHASE_TYPES.includes(settings.type)) {
       throw new Error(`validateSettings: type must be one of ${PHASE_TYPES.join(", ")}.`)
     }
