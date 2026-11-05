@@ -7,8 +7,8 @@ import {
   MatchSet,
   OpponentId,
   PhaseBracket,
-  PlayerOpponent,
   SetId,
+  type Entrants,
   type Opponent,
   type PhaseSettings,
   type TournamentPhase
@@ -34,8 +34,8 @@ export class DuelPhase extends PhaseBase {
     this.childrenMatches = new Map()
   }
 
-  public init(opponents: Opponent[], settings: DuelSettings): void {
-    super.init(opponents, settings)
+  public init(entrants: Entrants, settings: DuelSettings): void {
+    super.init(entrants, settings)
     this.settings = {
       ...this.settings,
       nbLBMatchSets: settings.nbLBMatchSets ? [...settings.nbLBMatchSets] : undefined
@@ -49,15 +49,15 @@ export class DuelPhase extends PhaseBase {
     this.progress()
   }
 
-  protected validateSettings(settings: DuelSettings, opponents: Opponent[]): void {
-    super.validateSettings(settings, opponents)
+  protected validateSettings(settings: DuelSettings, entrants: Entrants): void {
+    super.validateSettings(settings, entrants)
     if (settings.elimination !== "single" && settings.elimination !== "double") {
       throw new Error(`validateSettings: elimination must be either "single" or "double".`)
     }
-    if (opponents.length < 4 && settings.elimination === "double") {
+    if (entrants.length < 4 && settings.elimination === "double") {
       throw new Error(`validateSettings: double elimination requires at least 4 opponents.`)
     }
-    if (opponents.length < 4 && settings.enableExtendedFinals) {
+    if (entrants.length < 4 && settings.enableExtendedFinals) {
       throw new Error(`validateSettings: enableExtendedFinals requires at least 4 opponents.`)
     }
   }
@@ -758,7 +758,7 @@ export class DuelPhase extends PhaseBase {
         }
       }
 
-      ;(playerToUpdate as PlayerOpponent).stats = {
+      playerToUpdate.stats = {
         matchesPlayed: playerMatches.filter((m) => m && !m.contrib.forfeit).length,
         matchesRemaining: remainingMatches,
         matchesWon: playerMatches.filter((m) => m && !m.contrib.forfeit && m.contrib.win).length,

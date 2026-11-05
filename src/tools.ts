@@ -1,9 +1,11 @@
 import type {
+  Entrant,
   Match,
   MatchId,
   MatchSet,
   NodeId,
   Opponent,
+  PlayerEntrant,
   PlayerOpponent,
   Result,
   TeamOpponent,
@@ -48,6 +50,39 @@ export function newMatch(id: MatchId, nbSets: number, opponents: number): Match 
   return { id, opponents: Array(opponents).fill(undefined) as Opponent[], sets, locked: false, complete: false }
 }
 
+export function newTelemetry(): Telemetry {
+  return {
+    matchesPlayed: 0,
+    matchesRemaining: 0,
+    matchesWon: 0,
+    matchesLost: 0,
+    matchesDraw: 0,
+    setsPlayed: 0,
+    setsWon: 0,
+    setsLost: 0,
+    setsDraw: 0,
+    scoredPoints: 0,
+    concededPoints: 0,
+    ratioPoints: 0
+  }
+}
+
+function newPlayerOpponent(entrant: PlayerEntrant): PlayerOpponent {
+  return { type: "player", id: entrant.id, forfeit: false, stats: newTelemetry() }
+}
+
+/**
+ * Creates the opponents of a phase from its entrants, field by field: undeclared fields are not copied.
+ */
+export function newOpponents(entrants: Entrant[]): Opponent[] {
+  return entrants.map((entrant) => {
+    if (entrant.type === "team") {
+      return { type: "team", id: entrant.id, forfeit: false, players: entrant.players.map(newPlayerOpponent) }
+    }
+    return newPlayerOpponent(entrant)
+  })
+}
+
 export function computeScoreRatio(scored: number, conceded: number): number {
   return scored + conceded === 0 ? 0.5 : ((scored - conceded) / (scored + conceded) + 1) / 2 // between 0 and 1, 0.5 if draw
 }
@@ -65,11 +100,11 @@ export function deepCopyOpponents(opponents: (Opponent | undefined)[]): (Opponen
       return undefined
     }
     if (o.type === "player") {
-      return { ...o, stats: { ...(o as PlayerOpponent).stats } }
+      return { ...o, stats: { ...o.stats } }
     }
     return {
       ...o,
-      players: (o as TeamOpponent).players.map((p) => ({ ...p, stats: { ...(p as PlayerOpponent).stats } }))
+      players: o.players.map((p) => ({ ...p, stats: { ...p.stats } }))
     }
   })
 }

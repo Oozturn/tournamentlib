@@ -1,22 +1,48 @@
 ﻿/////////////////////////////////////////////
-// Opponent
+// Entrant
 /////////////////////////////////////////////
 
 export type OpponentId = string
-export type OpponentType = "player" | "team"
-export interface Opponent {
-  readonly type: OpponentType
+
+/**
+ * What the caller provides to enter a phase. The phase creates its opponents from these declared fields only.
+ */
+export interface PlayerEntrant {
+  readonly type: "player"
+  readonly id: OpponentId
+}
+export interface TeamEntrant {
+  readonly type: "team"
+  readonly id: OpponentId
+  players: PlayerEntrant[]
+}
+export type Entrant = PlayerEntrant | TeamEntrant
+/**
+ * The entrants of a phase, either all players or all teams: a list that mixes them doesn't compile.
+ */
+export type Entrants = PlayerEntrant[] | TeamEntrant[]
+
+/////////////////////////////////////////////
+// Opponent
+/////////////////////////////////////////////
+
+/**
+ * The state of an entrant within a phase, which the phase updates as it progresses.
+ */
+export interface PlayerOpponent {
+  readonly type: "player"
   readonly id: OpponentId
   forfeit: boolean
-}
-export interface PlayerOpponent extends Opponent {
-  readonly type: "player"
   stats: Telemetry
 }
-export interface TeamOpponent extends Opponent {
+export interface TeamOpponent {
   readonly type: "team"
+  readonly id: OpponentId
+  forfeit: boolean
   players: PlayerOpponent[]
 }
+export type Opponent = PlayerOpponent | TeamOpponent
+export type OpponentType = Opponent["type"]
 
 /////////////////////////////////////////////
 // Id
