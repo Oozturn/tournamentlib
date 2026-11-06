@@ -79,9 +79,14 @@ export interface SetId extends MatchId {
 export type matchIdString = string // Code readability
 export type roundIdString = string // Code readability
 export type setIdString = string // Code readability
+/**
+ * A set of a match and the score of each opponent who has one.
+ * A score is either a number or `"FF"`. Only a declared forfeit writes `"FF"`, for the opponent who forfeited: `score()`
+ * never accepts it.
+ */
 export interface MatchSet {
   readonly id: SetId
-  scores: Record<OpponentId, number>
+  scores: Record<OpponentId, number | "FF">
 }
 export interface Match {
   readonly id: MatchId
@@ -117,7 +122,6 @@ export interface PhaseSettings {
   nbMatchSets: number[]
   allMatchesSameSetsNumber: boolean
   matchWinRule: MatchWinRule
-  ffPlayerScoreAgainst: number
 }
 
 /////////////////////////////////////////////

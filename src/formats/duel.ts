@@ -14,6 +14,11 @@ import {
   type TournamentPhase
 } from "../types"
 
+/** Narrows the scores of a set to numbers, which is the case unless the set carries a forfeit (`"FF"`). */
+function isNumericScores(scores: MatchSet["scores"]): scores is Record<OpponentId, number> {
+  return !Object.values(scores).includes("FF")
+}
+
 export interface DuelSettings extends PhaseSettings {
   type: "duel"
   elimination: "single" | "double"
@@ -353,6 +358,11 @@ export class DuelPhase extends PhaseBase {
 
     const match = this._getMatch(setId)! // Match is checked in super.notScorable()
 
+    // A match resolved by a forfeit is frozen, for any of its opponents and even to remove a score
+    if (this.isResolvedByForfeit(match)) {
+      return "Match was resolved by a forfeit"
+    }
+
     // Equality in sets is possible, but not in match following the matchWinRule (bestOfN or sumOfSets)
     // Duplicate the match scores then apply the new one
     const poententialMatchSets: MatchSet[] = match.sets.map((set) => {
@@ -378,26 +388,28 @@ export class DuelPhase extends PhaseBase {
   protected lockMatch(match: Match): void {
     const { right, down } = this.getChildrenMatches(match.id)
 
-    if (
-      (right && right.match.sets.some((set) => Object.keys(set.scores).length > 0)) ||
-      (down && down.match.sets.some((set) => Object.keys(set.scores).length > 0))
-    ) {
+    if ((right && this.hasStarted(right.match)) || (down && this.hasStarted(down.match))) {
       match.locked = true
+    }
+    // A walkover match records no score, so its parents depend on the matches it feeds
+    if (this.hasWalkover(match)) {
+      this.getParentMatches(match.id).forEach((parent) => this.lockMatch(parent))
     }
   }
 
   protected unlockMatch(match: Match): void {
     const { right, down } = this.getChildrenMatches(match.id)
 
-    if (right && right.match.complete !== false && right.match.sets.some((set) => Object.keys(set.scores).length > 0)) {
-      return
+    if (
+      !(right && right.match.complete !== false && this.hasStarted(right.match)) &&
+      !(down && down.match.complete !== false && this.hasStarted(down.match))
+    ) {
+      match.locked = false
     }
-
-    if (down && down.match.complete !== false && down.match.sets.some((set) => Object.keys(set.scores).length > 0)) {
-      return
+    // A walkover match records no score, so its parents depend on the matches it feeds
+    if (this.hasWalkover(match)) {
+      this.getParentMatches(match.id).forEach((parent) => this.unlockMatch(parent))
     }
-
-    match.locked = false
   }
 
   protected matchIsComplete(match: Match): boolean {
@@ -424,12 +436,19 @@ export class DuelPhase extends PhaseBase {
       this.matchesToProgress.delete(idToString(nextId))
       let winnerId: OpponentId | undefined
       let loserId: OpponentId | undefined
-      if (matchToProgress.opponents.some((o) => o?.forfeit === true)) {
+      if (matchToProgress.opponents.some((o) => o?.id === "")) {
+        // A walkover progresses again, complete or not, as a parent correction can replace its other opponent
         ;({ winnerId, loserId } = this.progressFFMatch(matchToProgress) || {})
-      } else if (!matchToProgress.complete) {
-        this.progressIncompleteMatch(matchToProgress)
-      } else {
+      } else if (this.isResolvedByForfeit(matchToProgress)) {
+        // A match resolved by a forfeit is frozen
+        continue
+      } else if (matchToProgress.complete) {
+        // A played match stays played, even if one of its opponents forfeited since
         ;({ winnerId, loserId } = this.progressCompleteMatch(matchToProgress) || {})
+      } else if (matchToProgress.opponents.some((o) => o?.forfeit === true)) {
+        ;({ winnerId, loserId } = this.progressFFMatch(matchToProgress) || {})
+      } else {
+        this.progressIncompleteMatch(matchToProgress)
       }
       // If WO, don't record telemetry for the player who passed
       if (!matchToProgress.opponents.some((o) => o?.id === "")) {
@@ -455,50 +474,50 @@ export class DuelPhase extends PhaseBase {
   }
 
   /**
-   * Progress a ff match.
-   * One or both of the opponents are ff, so the match is complete as long as all opponents are present.
+   * Progress a match against a walkover or with a forfeiting opponent, which is complete as long as all opponents are
+   * present.
+   * The walkover loses first, otherwise the first forfeiting opponent loses: when both opponents forfeited, the one in
+   * position 2 wins. A forfeit replaces every set with `"FF"` for each forfeiting opponent, while a walkover writes nothing.
    */
   private progressFFMatch(match: Match): { winnerId: OpponentId; loserId: OpponentId } | void {
-    // If both are ff, just choose one as winner and the other as loser
-    // WO is priritized over ff, so if one is WO, the other is the winner
-
-    const ff = match.opponents.find((o) => o?.id === "") || match.opponents.find((o) => o?.forfeit === true)!
-    const winner = match.opponents.find((o) => o?.id !== ff.id)
+    const loser = match.opponents.find((o) => o?.id === "") || match.opponents.find((o) => o?.forfeit === true)!
+    const winner = match.opponents.find((o) => o?.id !== loser.id)
     if (!winner) return
 
-    // If the match is a grand final 1
+    // Write the forfeit, replacing the scores already recorded, unless the loser is a walkover.
+    // Then remove the contributions of the sets, so that the match doesn't count in the stats.
+    if (loser.id !== "") {
+      const forfeitScores = Object.fromEntries(
+        match.opponents.filter((o): o is Opponent => o?.forfeit === true).map((o) => [o.id, "FF" as const])
+      )
+      match.sets.forEach((set) => {
+        set.scores = { ...forfeitScores }
+        this.updateSetCache(set.id, match)
+      })
+    }
+    // Complete the match and lock its parents
+    match.complete = true
+    this.getParentMatches(match.id).forEach((parent) => this.lockMatch(parent))
+
+    // If the match is a grand final 1, the placement depends on its winner
     if (
       match.id.bracket === PhaseBracket.loser &&
       match.id.round === 2 * Math.ceil(Math.log2(this.opponents.length)) - 1
     ) {
-      this.progressGF1(match, winner.id, ff.id)
-      return { winnerId: winner.id, loserId: ff.id }
+      this.progressGF1(match, winner.id, loser.id)
+      return { winnerId: winner.id, loserId: loser.id }
     }
 
-    const { right, down } = this.getChildrenMatches(match.id) || {}
-    // Progress winner
-    if (ff.id !== "")
-      match.sets.forEach((matchSet) => (matchSet.scores[winner.id] = this.settings.ffPlayerScoreAgainst))
+    const { right, down } = this.getChildrenMatches(match.id)
     if (right) {
       right.match.opponents[right.index] = winner
       this.matchesToProgress.set(idToString(right.match.id), right.match.id)
     }
-    // Progress ff
-    if (ff.id !== "") match.sets.forEach((matchSet) => (matchSet.scores[ff.id] = 0))
     if (down) {
-      down.match.opponents[down.index] = ff
+      down.match.opponents[down.index] = loser
       this.matchesToProgress.set(idToString(down.match.id), down.match.id)
     }
-    // Complete the match
-    match.complete = true
-
-    // Lock its parents
-    const parentMatches = this.getParentMatches(match.id)
-    parentMatches.forEach((parent) => {
-      this.lockMatch(parent)
-    })
-
-    return { winnerId: winner.id, loserId: ff.id }
+    return { winnerId: winner.id, loserId: loser.id }
   }
 
   /**
@@ -617,10 +636,14 @@ export class DuelPhase extends PhaseBase {
   }
 
   protected updateSetCache(setId: SetId, match: Match): void {
-    const set = match.sets[setId.set - 1]!
+    const scores = match.sets[setId.set - 1]!.scores
 
-    // if the set is not complete, remove it from the cache and return
-    if (match.opponents.some((o) => o === undefined) || Object.keys(set.scores).length !== match.opponents.length) {
+    // if the set is not complete or carries a forfeit, remove it from the cache and return
+    if (
+      match.opponents.some((o) => o === undefined) ||
+      Object.keys(scores).length !== match.opponents.length ||
+      !isNumericScores(scores)
+    ) {
       if (this.setContribCache[idToString(setId)]) {
         delete this.setContribCache[idToString(setId)]
       }
@@ -653,8 +676,8 @@ export class DuelPhase extends PhaseBase {
       }
 
       const inverted = this.settings.invertedScoring
-      let scored = set.scores[o.id]!
-      let conceded = Object.entries(set.scores).filter(([id, _s]) => id !== o.id)[0]![1]
+      let scored = scores[o.id]!
+      let conceded = Object.entries(scores).filter(([id, _s]) => id !== o.id)[0]![1]
       if (inverted) {
         const tmp = scored
         scored = conceded
@@ -673,7 +696,8 @@ export class DuelPhase extends PhaseBase {
   }
 
   protected updateMatchCache(match: Match): void {
-    if (!match.complete) {
+    // A match resolved by a forfeit doesn't count in the stats of any of its opponents
+    if (!match.complete || this.isResolvedByForfeit(match)) {
       if (this.matchContribCache[idToString(match.id)]) {
         delete this.matchContribCache[idToString(match.id)]
       }
@@ -780,20 +804,47 @@ export class DuelPhase extends PhaseBase {
     }
   }
 
+  /**
+   * Whether the match was resolved by a forfeit, read from its scores (`"FF"`) and not from `Opponent.forfeit`, which
+   * describes the current state of an opponent and can be toggled back.
+   */
+  private isResolvedByForfeit(match: Match): boolean {
+    return match.sets.some((set) => !isNumericScores(set.scores))
+  }
+
+  private hasWalkover(match: Match): boolean {
+    return match.opponents.some((o) => o?.id === "")
+  }
+
+  /**
+   * Whether the match has a score. A walkover match never records one, so it counts as started once a match it feeds
+   * has started: changing its opponent would replace an opponent in that match.
+   */
+  private hasStarted(match: Match): boolean {
+    if (match.sets.some((set) => Object.keys(set.scores).length > 0)) {
+      return true
+    }
+    if (!this.hasWalkover(match)) {
+      return false
+    }
+    const { right, down } = this.getChildrenMatches(match.id)
+    return [right, down].some((child) => child !== null && this.hasStarted(child.match))
+  }
+
   private getPointsMap(match: Match): Map<OpponentId, number> {
     // Sum the scores for each opponent in the match, according to the matchWinRule)
     const pointsMap = new Map<OpponentId, number>()
-    match.sets.forEach((set) => {
-      // Only complete sets count
-      if (Object.keys(set.scores).length !== match.opponents.length) {
+    match.sets.forEach(({ scores }) => {
+      // Only complete sets count, and sets carrying a forfeit never do
+      if (Object.keys(scores).length !== match.opponents.length || !isNumericScores(scores)) {
         return
       }
       // Draw sets dont count for bestOfN, and are transparent for sumOfSets
-      if (this.settings.matchWinRule === "bestOfN" && new Set(Object.values(set.scores)).size === 1) {
+      if (this.settings.matchWinRule === "bestOfN" && new Set(Object.values(scores)).size === 1) {
         return
       }
-      const biggestScore = Math.max(...Object.values(set.scores))
-      for (const [opponentId, score] of Object.entries(set.scores)) {
+      const biggestScore = Math.max(...Object.values(scores))
+      for (const [opponentId, score] of Object.entries(scores)) {
         pointsMap.set(
           opponentId,
           (pointsMap.get(opponentId) || 0) +

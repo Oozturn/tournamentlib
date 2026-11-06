@@ -4,6 +4,7 @@
   Entrant,
   Entrants,
   MATCH_WIN_RULES,
+  MatchId,
   newOpponents,
   newTelemetry,
   PHASE_TYPES,
@@ -55,8 +56,7 @@ const duelBaseSettings: DuelSettings = {
   nbLBMatchSets: [1],
   elimination: "single",
   matchWinRule: "bestOfN",
-  downmix: true,
-  ffPlayerScoreAgainst: 30
+  downmix: true
 }
 function newDuel(nbOpponents: number, teams: boolean = false, settings?: Partial<DuelSettings>): DuelPhase {
   const opponents = teams ? createTeams(nbOpponents, 2) : createPlayers(nbOpponents)
@@ -577,10 +577,7 @@ describe("Duel phase scoring and progression", () => {
     duel.score({ phase: F, bracket: W, round: 3, match: 1, set: 1 }, "1", 3)
     duel.toggleForfeit("2")
     expect(duel.getMatch({ phase: F, bracket: W, round: 3, match: 1 })?.complete).toBe(true)
-    expect(duel.getMatch({ phase: F, bracket: W, round: 3, match: 1 })?.sets[0]?.scores).toStrictEqual({
-      "1": 30,
-      "2": 0
-    })
+    expect(duel.getMatch({ phase: F, bracket: W, round: 3, match: 1 })?.sets[0]?.scores).toStrictEqual({ "2": "FF" })
   })
 
   describe("Score validation", () => {
@@ -591,13 +588,19 @@ describe("Duel phase scoring and progression", () => {
       ["Infinity", Infinity],
       ["-Infinity", -Infinity],
       ['"3"', "3"],
-      ["null", null]
+      ["null", null],
+      ['"FF"', "FF"]
     ])("Rejected score leaves the match unchanged: %s", (_name, value) => {
       const duel = newDuel(4)
       score(duel, W, 1, 1, 1, "4", 1)
       const before = duel.getMatches()
       expect(() => score(duel, W, 1, 1, 1, "1", value as number)).toThrow(finiteError)
       expect(duel.getMatches()).toEqual(before)
+    })
+    test('A "FF" score doesn\'t compile', () => {
+      const duel = newDuel(4)
+      // @ts-expect-error: only a declared forfeit writes "FF", score() never accepts it
+      expect(() => duel.score({ phase: F, bracket: W, round: 1, match: 1, set: 1 }, "1", "FF")).toThrow(finiteError)
     })
     test("An invalid score on a locked match reports the lock", () => {
       const duel = newDuel(4)
@@ -811,6 +814,336 @@ describe("Duel phase scoring and progression", () => {
         concededPoints: 1,
         ratioPoints: ((8 - 1) / (8 + 1) + 1) / 2
       })
+    })
+  })
+})
+
+describe("Duel forfeit", () => {
+  const matchId = (bracket: PhaseBracket, round: number, match: number) => ({ phase: F, bracket, round, match })
+  const firstMatch = matchId(W, 1, 1)
+  const final = matchId(W, 2, 1)
+  const setScores = (duel: DuelPhase, id: MatchId) => duel.getMatch(id)?.sets.map((s) => s.scores)
+  const opponentIds = (duel: DuelPhase, id: MatchId) => duel.getMatch(id)?.opponents.map((o) => o?.id)
+
+  describe("Forfeit represented by the FF score", () => {
+    test("A player's forfeit on a one-set match", () => {
+      const duel = newDuel(4)
+      duel.toggleForfeit("1")
+      expect(setScores(duel, firstMatch)).toStrictEqual([{ "1": "FF" }])
+      expect(duel.getMatch(firstMatch)?.complete).toBe(true)
+      expect(opponentIds(duel, final)).toStrictEqual(["4", undefined])
+    })
+    test("A forfeit on a match with several sets", () => {
+      const duel = newDuel(4, false, { nbMatchSets: [3] })
+      duel.toggleForfeit("1")
+      expect(setScores(duel, firstMatch)).toStrictEqual([{ "1": "FF" }, { "1": "FF" }, { "1": "FF" }])
+    })
+    test("A team's forfeit is written under the team id", () => {
+      const duel = newDuel(4, true)
+      duel.toggleForfeit("1")
+      expect(setScores(duel, firstMatch)).toStrictEqual([{ "1": "FF" }])
+    })
+    test("The forfeit of a team's last player", () => {
+      const duel = newDuel(4, true)
+      duel.toggleForfeit("1-1")
+      duel.toggleForfeit("1-2")
+      expect(setScores(duel, firstMatch)).toStrictEqual([{ "1": "FF" }])
+    })
+    test("The forfeit of part of a team's players", () => {
+      const duel = newDuel(4, true)
+      duel.toggleForfeit("1-1")
+      expect(duel.getMatch(firstMatch)?.complete).toBe(false)
+      expect(setScores(duel, firstMatch)).toStrictEqual([{}])
+    })
+    test("A forfeit with inverted scoring", () => {
+      const duel = newDuel(4, false, { invertedScoring: true })
+      duel.toggleForfeit("1")
+      expect(setScores(duel, firstMatch)).toStrictEqual([{ "1": "FF" }])
+      expect(opponentIds(duel, final)).toStrictEqual(["4", undefined])
+    })
+  })
+
+  describe("No score given to the opponent", () => {
+    test("The opponent has no score", () => {
+      const duel = newDuel(4, false, { nbMatchSets: [3] })
+      duel.toggleForfeit("1")
+      duel.getMatch(firstMatch)?.sets.forEach((s) => expect(s.scores).not.toHaveProperty("4"))
+    })
+    test("The removed setting provided by a JavaScript caller has no effect", () => {
+      const duel = new DuelPhase(F)
+      const settings = { ...duelBaseSettings, ffPlayerScoreAgainst: 30 } as DuelSettings
+      expect(() => duel.init(createPlayers(4), settings)).not.toThrow()
+      duel.toggleForfeit("1")
+      expect(setScores(duel, firstMatch)).toStrictEqual([{ "1": "FF" }])
+    })
+  })
+
+  describe("Sets replaced by a forfeit during a match", () => {
+    test("A forfeit after a played set", () => {
+      const duel = newDuel(4, false, { nbMatchSets: [3] })
+      play(duel, [{ b: W, r: 1, m: 1, s: 1, p1: "1", p2: "4", sc1: 5, sc2: 2 }])
+      duel.toggleForfeit("1")
+      expect(setScores(duel, firstMatch)).toStrictEqual([{ "1": "FF" }, { "1": "FF" }, { "1": "FF" }])
+    })
+    test("A forfeit after a partial score", () => {
+      const duel = newDuel(2)
+      score(duel, W, 1, 1, 1, "1", 3)
+      duel.toggleForfeit("2")
+      expect(setScores(duel, firstMatch)).toStrictEqual([{ "2": "FF" }])
+    })
+  })
+
+  describe("Complete match not changed by a forfeit", () => {
+    test("A forfeit after a played match", () => {
+      const duel = newDuel(4)
+      play(duel, [{ b: W, r: 1, m: 1, p1: "1", p2: "4", sc1: 5, sc2: 2 }])
+      duel.toggleForfeit("1")
+      expect(setScores(duel, firstMatch)).toStrictEqual([{ "1": 5, "4": 2 }])
+    })
+    test("The forfeit of the winner of a match already resolved by a forfeit", () => {
+      const duel = newDuel(4)
+      duel.toggleForfeit("1")
+      duel.toggleForfeit("4")
+      expect(setScores(duel, firstMatch)).toStrictEqual([{ "1": "FF" }])
+    })
+    test("A cancelled forfeit", () => {
+      const duel = newDuel(4)
+      duel.toggleForfeit("1")
+      duel.toggleForfeit("1")
+      expect(duel.getOpponents(true, false).find((o) => o.id === "1")?.forfeit).toBe(false)
+      expect(setScores(duel, firstMatch)).toStrictEqual([{ "1": "FF" }])
+      expect(duel.getMatch(firstMatch)?.complete).toBe(true)
+    })
+  })
+
+  describe("Correction of a match played before a forfeit", () => {
+    // "1" beats "4", then forfeits while waiting for its opponent in the final
+    const playedThenForfeited = () => {
+      const duel = newDuel(4)
+      play(duel, [{ b: W, r: 1, m: 1, p1: "1", p2: "4", sc1: 5, sc2: 2 }])
+      duel.toggleForfeit("1")
+      return duel
+    }
+
+    test("A corrected value changing the winner", () => {
+      const duel = playedThenForfeited()
+      score(duel, W, 1, 1, 1, "4", 7)
+      expect(setScores(duel, firstMatch)).toStrictEqual([{ "1": 5, "4": 7 }])
+      expect(opponentIds(duel, final)).toStrictEqual(["4", undefined])
+    })
+    test("A corrected value keeping the winner", () => {
+      const duel = playedThenForfeited()
+      score(duel, W, 1, 1, 1, "4", 3)
+      expect(setScores(duel, firstMatch)).toStrictEqual([{ "1": 5, "4": 3 }])
+      expect(opponentIds(duel, final)).toStrictEqual(["1", undefined])
+    })
+    test("A removed score", () => {
+      const duel = playedThenForfeited()
+      score(duel, W, 1, 1, 1, "4", undefined)
+      expect(setScores(duel, firstMatch)).toStrictEqual([{ "1": "FF" }])
+      expect(opponentIds(duel, final)).toStrictEqual(["4", undefined])
+    })
+  })
+
+  describe("Match resolved by a forfeit not editable", () => {
+    const forfeitError = "Match was resolved by a forfeit"
+
+    test.each<[string, string, number | undefined]>([
+      ["a score of the opponent", "4", 9],
+      ["a score of the forfeiting opponent", "1", 9],
+      ["a removed score", "1", undefined]
+    ])("Rejects %s and leaves the phase unchanged", (_name, opponentId, value) => {
+      const duel = newDuel(4)
+      duel.toggleForfeit("1")
+      const before = { match: duel.getMatch(firstMatch), result: duel.getResult() }
+      expect(() => score(duel, W, 1, 1, 1, opponentId, value)).toThrow(forfeitError)
+      expect(duel.getMatch(firstMatch)).toStrictEqual(before.match)
+      expect(duel.getResult()).toStrictEqual(before.result)
+      expect(setScores(duel, firstMatch)).toStrictEqual([{ "1": "FF" }])
+    })
+  })
+
+  describe("Match resolved by a forfeit excluded from the stats", () => {
+    const stats = (duel: DuelPhase, id: string) => duel.getResult().find((r) => r.opponentId === id)?.telemetry
+    const noMatchCounted = {
+      matchesPlayed: 0,
+      matchesWon: 0,
+      matchesLost: 0,
+      setsPlayed: 0,
+      setsWon: 0,
+      setsLost: 0,
+      scoredPoints: 0,
+      concededPoints: 0
+    }
+
+    test("The winner of a forfeit without a played set", () => {
+      const duel = newDuel(4)
+      duel.toggleForfeit("1")
+      expect(stats(duel, "1")).toMatchObject(noMatchCounted)
+      expect(stats(duel, "4")).toMatchObject(noMatchCounted)
+    })
+    test("A forfeit after a played set", () => {
+      const duel = newDuel(4, false, { nbMatchSets: [3] })
+      play(duel, [{ b: W, r: 1, m: 1, s: 1, p1: "1", p2: "4", sc1: 5, sc2: 2 }])
+      duel.toggleForfeit("1")
+      expect(stats(duel, "1")).toMatchObject(noMatchCounted)
+      expect(stats(duel, "4")).toMatchObject(noMatchCounted)
+    })
+    test("A forfeit after a played set with inverted scoring", () => {
+      const duel = newDuel(4, false, { nbMatchSets: [3], invertedScoring: true })
+      play(duel, [{ b: W, r: 1, m: 1, s: 1, p1: "1", p2: "4", sc1: 5, sc2: 2 }])
+      duel.toggleForfeit("1")
+      expect(stats(duel, "4")?.matchesLost).toBe(0)
+      expect(stats(duel, "1")).toMatchObject(noMatchCounted)
+      expect(stats(duel, "4")).toMatchObject(noMatchCounted)
+    })
+    test("A forfeit after a played set, for every player of the teams", () => {
+      const duel = newDuel(4, true, { nbMatchSets: [3] })
+      play(duel, [{ b: W, r: 1, m: 1, s: 1, p1: "1", p2: "4", sc1: 5, sc2: 2 }])
+      duel.toggleForfeit("1")
+      ;["1-1", "1-2", "4-1", "4-2"].forEach((id) => expect(stats(duel, id)).toMatchObject(noMatchCounted))
+    })
+    test("A forfeit after a played match", () => {
+      const duel = newDuel(4)
+      play(duel, [{ b: W, r: 1, m: 1, p1: "1", p2: "4", sc1: 7, sc2: 1 }])
+      duel.toggleForfeit("1")
+      // The final is resolved by the forfeit of "1" once its opponent is known
+      play(duel, [{ b: W, r: 1, m: 2, p1: "2", p2: "3", sc1: 3, sc2: 1 }])
+      expect(setScores(duel, final)).toStrictEqual([{ "1": "FF" }])
+      expect(stats(duel, "1")).toMatchObject({
+        matchesPlayed: 1,
+        matchesWon: 1,
+        matchesLost: 0,
+        scoredPoints: 7,
+        concededPoints: 1
+      })
+      expect(stats(duel, "2")).toMatchObject({ matchesPlayed: 1, matchesWon: 1, scoredPoints: 3 })
+    })
+  })
+
+  describe("Double forfeit in a match", () => {
+    test("Double forfeit in the loser bracket", () => {
+      const duel = newDuel(8, false, { elimination: "double" })
+      duel.toggleForfeit("1")
+      duel.toggleForfeit("4")
+      const match = duel.getMatch(matchId(L, 1, 1))
+      expect(match?.opponents.map((o) => o?.id)).toStrictEqual(["4", "1"])
+      expect(match?.opponents.map((o) => o?.forfeit)).toStrictEqual([true, true])
+      expect(match?.sets.map((s) => s.scores)).toStrictEqual([{ "4": "FF", "1": "FF" }])
+      expect(match?.complete).toBe(true)
+      // "1", in position 2, moves on to the next loser bracket round
+      expect(opponentIds(duel, matchId(L, 2, 1))).toStrictEqual([undefined, "1"])
+    })
+    test("Double forfeit in the bronze final", () => {
+      const duel = newDuel(4, false, { enableExtendedFinals: true })
+      duel.toggleForfeit("1")
+      duel.toggleForfeit("2")
+      const match = duel.getMatch(matchId(L, 1, 1))
+      expect(match?.opponents.map((o) => o?.id)).toStrictEqual(["1", "2"])
+      expect(match?.opponents.map((o) => o?.forfeit)).toStrictEqual([true, true])
+      expect(match?.sets.map((s) => s.scores)).toStrictEqual([{ "1": "FF", "2": "FF" }])
+      expect(match?.complete).toBe(true)
+    })
+    test("The next match of the forfeiting opponent who moves on", () => {
+      const duel = newDuel(8, false, { elimination: "double" })
+      duel.toggleForfeit("1")
+      duel.toggleForfeit("4")
+      // The loser of this match joins "1" in the next loser bracket round
+      play(duel, [{ b: W, r: 2, m: 1, p1: "8", p2: "5", sc1: 3, sc2: 1 }])
+      expect(opponentIds(duel, matchId(L, 2, 1))).toStrictEqual(["5", "1"])
+      expect(setScores(duel, matchId(L, 2, 1))).toStrictEqual([{ "1": "FF" }])
+      expect(opponentIds(duel, matchId(L, 3, 1))).toContain("5")
+    })
+  })
+
+  describe("Forfeit in the grand final", () => {
+    // With 4 opponents, the grand final 1 is loser bracket round 3 and the grand final 2 is round 4
+    const gf1 = matchId(L, 3, 1)
+    const gf2 = matchId(L, 4, 1)
+    const playMatch = (duel: DuelPhase, id: MatchId) => {
+      const [p1, p2] = opponentIds(duel, id)!
+      play(duel, [{ b: id.bracket, r: id.round, m: id.match, p1: p1!, p2: p2!, sc1: 3, sc2: 1 }])
+    }
+    // Plays every match before the grand final 1 and returns its opponents
+    const reachGrandFinal = (duel: DuelPhase) => {
+      autoPlay(duel, W)
+      playMatch(duel, matchId(L, 1, 1))
+      playMatch(duel, matchId(L, 2, 1))
+      return opponentIds(duel, gf1)!
+    }
+
+    test("Grand final without extended finals", () => {
+      const duel = newDuel(4, false, { elimination: "double" })
+      const [, second] = reachGrandFinal(duel)
+      expect(duel.getCompletion()).toBe(5 / 6)
+      duel.toggleForfeit(second!)
+      expect(setScores(duel, gf1)).toStrictEqual([{ [second!]: "FF" }])
+      expect(duel.getCompletion()).toBe(1)
+    })
+    test("Forfeit of the opponent in position 2 with extended finals", () => {
+      const duel = newDuel(4, false, { elimination: "double", enableExtendedFinals: true })
+      const [, second] = reachGrandFinal(duel)
+      duel.toggleForfeit(second!)
+      expect(duel.getMatch(gf1)?.complete).toBe(true)
+      expect(duel.getMatch(gf2)?.complete).toBe(true)
+      expect(setScores(duel, gf2)).toStrictEqual([{}])
+      expect(duel.getCompletion()).toBe(1)
+    })
+    test("Forfeit of the opponent in position 1 with extended finals", () => {
+      const duel = newDuel(4, false, { elimination: "double", enableExtendedFinals: true })
+      const [first] = reachGrandFinal(duel)
+      duel.toggleForfeit(first!)
+      expect(duel.getMatch(gf1)?.complete).toBe(true)
+      expect(duel.getMatch(gf2)?.complete).toBe(true)
+      expect(setScores(duel, gf1)).toStrictEqual([{ [first!]: "FF" }])
+      expect(setScores(duel, gf2)).toStrictEqual([{ [first!]: "FF" }])
+      expect(duel.getCompletion()).toBe(1)
+    })
+  })
+
+  describe("Walkover distinct from forfeit", () => {
+    test("A walkover without forfeit", () => {
+      const duel = newDuel(3)
+      expect(opponentIds(duel, firstMatch)).toStrictEqual(["1", ""])
+      expect(duel.getMatch(firstMatch)?.complete).toBe(true)
+      expect(setScores(duel, firstMatch)).toStrictEqual([{}])
+    })
+    test("A forfeiting opponent against a walkover", () => {
+      const duel = newDuel(6, false, { elimination: "double" })
+      duel.toggleForfeit("5")
+      const lbMatch = matchId(L, 1, 1)
+      expect(opponentIds(duel, lbMatch)).toStrictEqual(["5", ""])
+      expect(duel.getMatch(lbMatch)?.complete).toBe(true)
+      expect(setScores(duel, lbMatch)).toStrictEqual([{}])
+      expect(opponentIds(duel, matchId(L, 2, 1))).toContain("5")
+    })
+    test("A parent correction replaces the opponent of a complete walkover match", () => {
+      const duel = newDuel(6, false, { elimination: "double" })
+      const lbMatch = matchId(L, 1, 1)
+      play(duel, [{ b: W, r: 1, m: 2, p1: "4", p2: "5", sc1: 3, sc2: 1 }])
+      expect(opponentIds(duel, matchId(L, 2, 1))).toContain("5")
+      score(duel, W, 1, 2, 1, "5", 4)
+      expect(opponentIds(duel, lbMatch)).toStrictEqual(["4", ""])
+      expect(duel.getMatch(lbMatch)?.complete).toBe(true)
+      expect(setScores(duel, lbMatch)).toStrictEqual([{}])
+      expect(opponentIds(duel, matchId(L, 2, 1))).toContain("4")
+      expect(opponentIds(duel, matchId(L, 2, 1))).not.toContain("5")
+    })
+    test("A played match after a walkover locks the parents of the walkover match", () => {
+      // "9" loses to "8", passes the walkover in loser bracket round 1, then plays loser bracket round 2
+      const duel = newDuel(10, false, { elimination: "double" })
+      play(duel, [
+        { b: W, r: 1, m: 2, p1: "8", p2: "9", sc1: 3, sc2: 1 },
+        { b: W, r: 2, m: 2, p1: "4", p2: "5", sc1: 3, sc2: 1 },
+        { b: L, r: 2, m: 1, p1: "5", p2: "9", sc1: 3, sc2: 1 }
+      ])
+      expect(() => score(duel, W, 1, 2, 1, "9", 4)).toThrow("Match is locked")
+      expect(opponentIds(duel, matchId(L, 2, 1))).toStrictEqual(["5", "9"])
+      // Clearing the match after the walkover unlocks them again
+      score(duel, L, 2, 1, 1, "5", undefined)
+      score(duel, L, 2, 1, 1, "9", undefined)
+      score(duel, W, 1, 2, 1, "9", 4)
+      expect(opponentIds(duel, matchId(L, 2, 1))).toStrictEqual(["5", "8"])
     })
   })
 })
