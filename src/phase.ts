@@ -54,6 +54,8 @@ export interface Phase {
   /**
    * Toggles the forfeit status of an opponent (or a player within a team), then re-progresses the phase so that
    * matches, telemetry and results reflect the new forfeit state.
+   * A match resolved by a forfeit carries the score `"FF"` for each opponent who forfeited, and no score for the other
+   * opponents. This is the only way to write `"FF"`. How a forfeit resolves a match depends on the phase type.
    */
   toggleForfeit(opponentId: OpponentId): void
 
@@ -65,6 +67,8 @@ export interface Phase {
   /**
    * Records (or removes, when score is undefined) an opponent's score for a given set, then progresses the
    * tournament, recomputes completion, telemetry and results accordingly.
+   * The score must be a finite number or undefined: `"FF"` is rejected, as only a declared forfeit (`toggleForfeit`)
+   * writes it.
    */
   score(setId: SetId, opponentId: OpponentId, score: number | undefined): void
 }
