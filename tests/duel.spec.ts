@@ -739,6 +739,62 @@ describe("Duel phase scoring and progression", () => {
     })
   })
 
+  describe("Duel completion", () => {
+    const semiFinals: Step[] = [
+      { b: W, r: 1, m: 1, p1: "1", p2: "4", sc1: 3, sc2: 1 },
+      { b: W, r: 1, m: 2, p1: "2", p2: "3", sc1: 3, sc2: 1 }
+    ]
+    const final: Step = { b: W, r: 2, m: 1, p1: "1", p2: "2", sc1: 3, sc2: 1 }
+
+    test("First match played", () => {
+      const duel = newDuel(4)
+      play(duel, [semiFinals[0]!])
+      expect(duel.getCompletion()).toBe(1 / 3)
+    })
+    test("All matches played", () => {
+      const duel = newDuel(4)
+      play(duel, [...semiFinals, final])
+      expect(duel.getCompletion()).toBe(1)
+    })
+    test("Match completed by a forfeit before any score", () => {
+      const duel = newDuel(4)
+      duel.toggleForfeit("4")
+      expect(duel.getCompletion()).toBe(1 / 3)
+    })
+    test("Read before then after init", () => {
+      const duel = new DuelPhase(F)
+      expect(duel.getCompletion()).toBe(0)
+      duel.init(createPlayers(3), duelBaseSettings)
+      expect(duel.getCompletion()).toBe(1 / 3)
+    })
+    test("Phase with walkovers counts them right after init", () => {
+      expect(newDuel(3).getCompletion()).toBe(1 / 3)
+    })
+    test("Phase without walkover", () => {
+      expect(newDuel(4).getCompletion()).toBe(0)
+    })
+    test("Removing a score of the final", () => {
+      const duel = newDuel(4)
+      play(duel, [...semiFinals, final])
+      score(duel, W, 2, 1, 1, "2", undefined)
+      expect(duel.getCompletion()).toBe(2 / 3)
+    })
+    test("A rejected score leaves the completion unchanged", () => {
+      const duel = newDuel(4)
+      play(duel, [...semiFinals, final])
+      const before = duel.getCompletion()
+      expect(() => score(duel, W, 1, 1, 1, "4", 5)).toThrow("Match is locked")
+      expect(duel.getCompletion()).toBe(before)
+    })
+    test("Successive reads return the same value", () => {
+      const duel = newDuel(3)
+      play(duel, [{ b: W, r: 1, m: 2, p1: "2", p2: "3", sc1: 3, sc2: 1 }])
+      const first = duel.getCompletion()
+      expect(duel.getCompletion()).toBe(first)
+      expect(duel.getCompletion()).toBe(first)
+    })
+  })
+
   describe("Opponent telemetry", () => {
     test("Opponent telemetry - solo player", () => {
       const soloDuel = newDuel(7)

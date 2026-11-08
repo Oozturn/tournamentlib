@@ -42,7 +42,10 @@ export interface Phase {
 
   /** Returns the current ranking of the phase, one entry per player, sorted by rank. */
   getResult(): Result[]
-  /** Returns the phase completion ratio, from 0 (no match complete) to 1 (all matches complete). */
+  /**
+   * Returns the phase completion ratio, from 0 (no match complete) to 1 (all matches complete), computed on each call.
+   * Matches completed by a walkover or a forfeit count as complete. Returns 0 before `init`.
+   */
   getCompletion(): number
 
   /**
@@ -66,7 +69,7 @@ export interface Phase {
 
   /**
    * Records (or removes, when score is undefined) an opponent's score for a given set, then progresses the
-   * tournament, recomputes completion, telemetry and results accordingly.
+   * tournament and recomputes telemetry and results accordingly.
    * The score must be a finite number or undefined: `"FF"` is rejected, as only a declared forfeit (`toggleForfeit`)
    * writes it.
    */
@@ -83,7 +86,6 @@ export abstract class PhaseBase implements Phase {
   protected players: PlayerOpponent[] = []
   protected teamOfPlayers: Map<OpponentId, TeamOpponent> = new Map()
   private resultsCache: Result[] = []
-  private completion: number = 0
 
   // Avoid to search for matches to progress by caching the edited ones
   protected matchesToProgress: Map<matchIdString, MatchId> = new Map()
@@ -167,7 +169,10 @@ export abstract class PhaseBase implements Phase {
   }
 
   public getCompletion(): number {
-    return this.completion
+    if (this.matches.length === 0) {
+      return 0
+    }
+    return this.matches.filter((match) => match.complete).length / this.matches.length
   }
 
   public getOpponents(includeForfeited: boolean, individualOpponents: boolean): Opponent[] {
@@ -211,7 +216,6 @@ export abstract class PhaseBase implements Phase {
       }
     }
     this.progress()
-    this.updateCompletion()
     this.updatePlayersTelemetry()
     this.updateResultsCache()
   }
@@ -252,7 +256,6 @@ export abstract class PhaseBase implements Phase {
     }
     this.matchesToProgress.set(idToString(match.id), match.id)
     this.progress()
-    this.updateCompletion()
     this.updatePlayersTelemetry()
     this.updateResultsCache()
   }
@@ -324,10 +327,6 @@ export abstract class PhaseBase implements Phase {
         this.resultsCache[index + 1]!.rank = result.rank
       }
     })
-  }
-
-  protected updateCompletion() {
-    this.completion = this.matches.filter((match) => match.complete).length / this.matches.length
   }
 
   protected indexMatches(): void {
