@@ -40,7 +40,10 @@ export interface Phase {
    */
   init(entrants: Entrants, settings: PhaseSettings): void
 
-  /** Returns the current ranking of the phase, one entry per player, sorted by rank. */
+  /**
+   * Returns the current ranking of the phase, one entry per player, sorted by rank, computed on each call from the
+   * players' forfeit and telemetry. Returns an empty list before `init`.
+   */
   getResult(): Result[]
   /**
    * Returns the phase completion ratio, from 0 (no match complete) to 1 (all matches complete), computed on each call.
@@ -69,7 +72,7 @@ export interface Phase {
 
   /**
    * Records (or removes, when score is undefined) an opponent's score for a given set, then progresses the
-   * tournament and recomputes telemetry and results accordingly.
+   * tournament and recomputes telemetry accordingly.
    * The score must be a finite number or undefined: `"FF"` is rejected, as only a declared forfeit (`toggleForfeit`)
    * writes it.
    */
@@ -85,7 +88,6 @@ export abstract class PhaseBase implements Phase {
   protected opponents: Opponent[] = []
   protected players: PlayerOpponent[] = []
   protected teamOfPlayers: Map<OpponentId, TeamOpponent> = new Map()
-  private resultsCache: Result[] = []
 
   // Avoid to search for matches to progress by caching the edited ones
   protected matchesToProgress: Map<matchIdString, MatchId> = new Map()
@@ -165,7 +167,31 @@ export abstract class PhaseBase implements Phase {
   }
 
   public getResult(): Result[] {
-    return this.resultsCache.map((r) => ({ ...r, telemetry: { ...r.telemetry } }))
+    const results: Result[] = this.players
+      .map((player) => ({
+        opponentId: player.id,
+        rank: 0,
+        forfeit: player.forfeit,
+        telemetry: { ...player.stats }
+      }))
+      .sort(
+        // TODO: Validate the sorting criteria
+        ({ forfeit: ffa, telemetry: a }, { forfeit: ffb, telemetry: b }) =>
+          (ffa ? 1 : 0) - (ffb ? 1 : 0) ||
+          b.matchesWon - a.matchesWon ||
+          b.setsWon - a.setsWon ||
+          b.matchesDraw - a.matchesDraw ||
+          b.setsDraw - a.setsDraw ||
+          b.ratioPoints - a.ratioPoints
+      )
+      .map((result, index) => ({ ...result, rank: index + 1 }))
+
+    results.forEach((result, index) => {
+      if (results[index + 1] && sameResults(result, results[index + 1]!)) {
+        results[index + 1]!.rank = result.rank
+      }
+    })
+    return results
   }
 
   public getCompletion(): number {
@@ -217,7 +243,6 @@ export abstract class PhaseBase implements Phase {
     }
     this.progress()
     this.updatePlayersTelemetry()
-    this.updateResultsCache()
   }
 
   public getMatch(matchId: MatchId): Match | undefined {
@@ -257,7 +282,6 @@ export abstract class PhaseBase implements Phase {
     this.matchesToProgress.set(idToString(match.id), match.id)
     this.progress()
     this.updatePlayersTelemetry()
-    this.updateResultsCache()
   }
 
   protected validateEntrants(entrants: Entrants): void {
@@ -296,37 +320,6 @@ export abstract class PhaseBase implements Phase {
     if (!MATCH_WIN_RULES.includes(settings.matchWinRule)) {
       throw new Error(`validateSettings: matchWinRule must be one of ${MATCH_WIN_RULES.join(", ")}.`)
     }
-  }
-
-  protected updateResultsCache() {
-    // Get players telemetry, extract the place and forfeit status, and update the resultsCache
-    const results = this.players.map((player) => {
-      return {
-        opponentId: player.id,
-        rank: 0,
-        forfeit: player.forfeit,
-        telemetry: player.stats
-      }
-    })
-
-    this.resultsCache = results
-      .sort(
-        // TODO: Validate the sorting criteria
-        ({ forfeit: ffa, telemetry: a }, { forfeit: ffb, telemetry: b }) =>
-          (ffa ? 1 : 0) - (ffb ? 1 : 0) ||
-          b.matchesWon - a.matchesWon ||
-          b.setsWon - a.setsWon ||
-          b.matchesDraw - a.matchesDraw ||
-          b.setsDraw - a.setsDraw ||
-          b.ratioPoints - a.ratioPoints
-      )
-      .map((result, index) => ({ ...result, rank: index + 1 }))
-
-    this.resultsCache.forEach((result, index) => {
-      if (this.resultsCache[index + 1] && sameResults(result, this.resultsCache[index + 1]!)) {
-        this.resultsCache[index + 1]!.rank = result.rank
-      }
-    })
   }
 
   protected indexMatches(): void {
