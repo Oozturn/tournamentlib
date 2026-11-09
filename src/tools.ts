@@ -1,16 +1,4 @@
-import type {
-  Entrant,
-  Match,
-  MatchId,
-  MatchSet,
-  NodeId,
-  Opponent,
-  PlayerEntrant,
-  PlayerOpponent,
-  Result,
-  TeamOpponent,
-  Telemetry
-} from "./types"
+import type { Entrant, Match, MatchId, MatchSet, NodeId, Opponent, Result, Telemetry } from "./types"
 
 /**
  * Checks if the provided NodeId matches the filter.
@@ -67,46 +55,19 @@ export function newTelemetry(): Telemetry {
   }
 }
 
-function newPlayerOpponent(entrant: PlayerEntrant): PlayerOpponent {
-  return { type: "player", id: entrant.id, forfeit: false, stats: newTelemetry() }
-}
-
 /**
- * Creates the opponents of a phase from its entrants, field by field: undeclared fields are not copied.
+ * Creates the opponents of a phase from its entrants, reading only their id: undeclared fields are not copied.
  */
 export function newOpponents(entrants: Entrant[]): Opponent[] {
-  return entrants.map((entrant) => {
-    if (entrant.type === "team") {
-      return { type: "team", id: entrant.id, forfeit: false, players: entrant.players.map(newPlayerOpponent) }
-    }
-    return newPlayerOpponent(entrant)
-  })
+  return entrants.map((entrant) => ({ id: entrant.id, forfeit: false, stats: newTelemetry() }))
 }
 
 export function computeScoreRatio(scored: number, conceded: number): number {
   return scored + conceded === 0 ? 0.5 : ((scored - conceded) / (scored + conceded) + 1) / 2 // between 0 and 1, 0.5 if draw
 }
 
-/**
- * Type guard narrowing an Opponent to a TeamOpponent, avoiding `as TeamOpponent` casts.
- */
-export function isTeamOpponent(opponent: Opponent): opponent is TeamOpponent {
-  return opponent.type === "team"
-}
-
 export function deepCopyOpponents(opponents: (Opponent | undefined)[]): (Opponent | undefined)[] {
-  return opponents.map((o) => {
-    if (!o) {
-      return undefined
-    }
-    if (o.type === "player") {
-      return { ...o, stats: { ...o.stats } }
-    }
-    return {
-      ...o,
-      players: o.players.map((p) => ({ ...p, stats: { ...p.stats } }))
-    }
-  })
+  return opponents.map((o) => (o ? { ...o, stats: { ...o.stats } } : undefined))
 }
 export function deepCopyMatch(match: Match | undefined): Match | undefined {
   if (!match) {

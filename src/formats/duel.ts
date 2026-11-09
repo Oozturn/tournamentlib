@@ -1,5 +1,5 @@
 ﻿import { PhaseBase } from "../phase"
-import { computeScoreRatio, idToString, isTeamOpponent, newMatch } from "../tools"
+import { computeScoreRatio, idToString, newMatch, newTelemetry } from "../tools"
 import {
   Match,
   MatchId,
@@ -8,7 +8,7 @@ import {
   OpponentId,
   PhaseBracket,
   SetId,
-  type Entrants,
+  type Entrant,
   type Opponent,
   type PhaseSettings,
   type TournamentPhase
@@ -39,7 +39,7 @@ export class DuelPhase extends PhaseBase {
     this.childrenMatches = new Map()
   }
 
-  public init(entrants: Entrants, settings: DuelSettings): void {
+  public init(entrants: Entrant[], settings: DuelSettings): void {
     super.init(entrants, settings)
     this.settings = {
       ...this.settings,
@@ -54,7 +54,7 @@ export class DuelPhase extends PhaseBase {
     this.progress()
   }
 
-  protected validateSettings(settings: DuelSettings, entrants: Entrants): void {
+  protected validateSettings(settings: DuelSettings, entrants: Entrant[]): void {
     super.validateSettings(settings, entrants)
     if (settings.elimination !== "single" && settings.elimination !== "double") {
       throw new Error(`validateSettings: elimination must be either "single" or "double".`)
@@ -97,7 +97,7 @@ export class DuelPhase extends PhaseBase {
       [1]
     )
     // Populate first round matches with opponents
-    const WOopponent = { id: "", type: "player", forfeit: true } as Opponent
+    const WOopponent: Opponent = { id: "", forfeit: true, stats: newTelemetry() }
     this.matches.forEach((match, index) => {
       const seed1 = seeds[index * 2]! - 1
       const seed2 = seeds[index * 2 + 1]! - 1
@@ -455,20 +455,10 @@ export class DuelPhase extends PhaseBase {
         this.updateMatchCache(matchToProgress)
       }
       if (winnerId) {
-        const winner = matchToProgress.opponents.find((o) => o?.id === winnerId)
-        if (winner && isTeamOpponent(winner)) {
-          winner.players.forEach((player) => this.playersToUpdateTelemetry.add(player.id))
-        } else {
-          this.playersToUpdateTelemetry.add(winnerId)
-        }
+        this.playersToUpdateTelemetry.add(winnerId)
       }
       if (loserId) {
-        const loser = matchToProgress.opponents.find((o) => o?.id === loserId)
-        if (loser && isTeamOpponent(loser)) {
-          loser.players.forEach((player) => this.playersToUpdateTelemetry.add(player.id))
-        } else {
-          this.playersToUpdateTelemetry.add(loserId)
-        }
+        this.playersToUpdateTelemetry.add(loserId)
       }
     }
   }
@@ -657,24 +647,6 @@ export class DuelPhase extends PhaseBase {
     match.opponents.forEach((o) => {
       if (!o) return
 
-      const updatePlayerCache = (
-        pId: OpponentId,
-        ff: boolean,
-        contrib: { scored: number; conceded: number; ratioPoints: number } | undefined
-      ) => {
-        // player not recorded yet and not ff (new score), or player already recorded and was not ff (score update)
-        if (
-          (!this.setContribCache[idToString(setId)]!.has(pId) && !ff) ||
-          this.setContribCache[idToString(setId)]!.get(pId)?.forfeit === false
-        ) {
-          this.setContribCache[idToString(setId)]!.set(pId, { forfeit: false, contrib: contrib })
-        }
-        // player already recorded and was ff, of player not recoded and is ff
-        else {
-          this.setContribCache[idToString(setId)]!.set(pId, { forfeit: true, contrib: undefined })
-        }
-      }
-
       const inverted = this.settings.invertedScoring
       let scored = scores[o.id]!
       let conceded = Object.entries(scores).filter(([id, _s]) => id !== o.id)[0]![1]
@@ -685,12 +657,14 @@ export class DuelPhase extends PhaseBase {
       }
       const ratioPoints = computeScoreRatio(scored, conceded)
 
-      if (isTeamOpponent(o)) {
-        return o.players.forEach((p) => {
-          updatePlayerCache(p.id, p.forfeit, { scored, conceded, ratioPoints })
-        })
-      } else {
-        updatePlayerCache(o.id, o.forfeit, { scored, conceded, ratioPoints })
+      const setCache = this.setContribCache[idToString(setId)]!
+      // opponent not recorded yet and not ff (new score), or opponent already recorded and was not ff (score update)
+      if ((!setCache.has(o.id) && !o.forfeit) || setCache.get(o.id)?.forfeit === false) {
+        setCache.set(o.id, { forfeit: false, contrib: { scored, conceded, ratioPoints } })
+      }
+      // opponent already recorded and was ff, or opponent not recorded and is ff
+      else {
+        setCache.set(o.id, { forfeit: true, contrib: undefined })
       }
     })
   }
@@ -738,9 +712,9 @@ export class DuelPhase extends PhaseBase {
   protected updatePlayersTelemetry(): void {
     while (this.playersToUpdateTelemetry.size) {
       const nextPlayerId = this.playersToUpdateTelemetry.values().next().value!
-      const playerToUpdate = this.players.find((o) => o.id === nextPlayerId)
+      const playerToUpdate = this.opponents.find((o) => o.id === nextPlayerId)
       if (!playerToUpdate) {
-        throw new Error(`updatePlayersTelemetry: player ${nextPlayerId} not found.`)
+        throw new Error(`updatePlayersTelemetry: opponent ${nextPlayerId} not found.`)
       }
       this.playersToUpdateTelemetry.delete(nextPlayerId)
 
@@ -757,15 +731,12 @@ export class DuelPhase extends PhaseBase {
           )
         )
         .map(([matchId, contribMap]) => {
-          // Find either the playerId or the teamIdfor that contrib
-          const opponentIdToSearch = this.teamOfPlayers.get(nextPlayerId)?.id || nextPlayerId
-          if (contribMap.has(opponentIdToSearch)) {
-            return { matchId, contrib: contribMap.get(opponentIdToSearch)! }
+          if (contribMap.has(nextPlayerId)) {
+            return { matchId, contrib: contribMap.get(nextPlayerId)! }
           }
         })
 
-      const opponentIdToSearch = this.teamOfPlayers.get(nextPlayerId)?.id || nextPlayerId
-      const latestMatch = this.matches.find((m) => m.opponents.some((o) => o?.id === opponentIdToSearch) && !m.complete)
+      const latestMatch = this.matches.find((m) => m.opponents.some((o) => o?.id === nextPlayerId) && !m.complete)
       let remainingMatches = 0
       if (latestMatch !== undefined) {
         const { bracket, round } = latestMatch.id

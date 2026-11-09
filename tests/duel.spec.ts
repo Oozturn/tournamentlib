@@ -2,16 +2,12 @@
   DuelPhase,
   DuelSettings,
   Entrant,
-  Entrants,
   MATCH_WIN_RULES,
   MatchId,
   newOpponents,
   newTelemetry,
   PHASE_TYPES,
   PhaseBracket,
-  PlayerEntrant,
-  PlayerOpponent,
-  TeamEntrant,
   TournamentPhase
 } from "../src"
 const W = PhaseBracket.winner
@@ -33,18 +29,8 @@ const zeroStats = {
   ratioPoints: 0
 }
 
-function createPlayers(nb: number): PlayerEntrant[] {
-  return Array.from({ length: nb }, (_, index) => ({
-    id: `${index + 1}`,
-    type: "player"
-  }))
-}
-function createTeams(nbTeams: number, nbPlayersPerTeam: number): TeamEntrant[] {
-  return Array.from({ length: nbTeams }, (_, index) => ({
-    id: `${index + 1}`,
-    type: "team",
-    players: createPlayers(nbPlayersPerTeam).map((p) => ({ ...p, id: `${index + 1}-${p.id}` }))
-  }))
+function createPlayers(nb: number): Entrant[] {
+  return Array.from({ length: nb }, (_, index) => ({ id: `${index + 1}` }))
 }
 
 const duelBaseSettings: DuelSettings = {
@@ -58,10 +44,9 @@ const duelBaseSettings: DuelSettings = {
   matchWinRule: "bestOfN",
   downmix: true
 }
-function newDuel(nbOpponents: number, teams: boolean = false, settings?: Partial<DuelSettings>): DuelPhase {
-  const opponents = teams ? createTeams(nbOpponents, 2) : createPlayers(nbOpponents)
+function newDuel(nbOpponents: number, settings?: Partial<DuelSettings>): DuelPhase {
   const duel = new DuelPhase(F)
-  duel.init(opponents, { ...duelBaseSettings, ...settings })
+  duel.init(createPlayers(nbOpponents), { ...duelBaseSettings, ...settings })
   return duel
 }
 type Step = {
@@ -110,17 +95,17 @@ const score = (
 describe("Duel phase structure and graph", () => {
   describe("Duel input validation", () => {
     test("Duel type", () =>
-      expect(() => newDuel(2, false, { elimination: "invalid" } as unknown as Partial<DuelSettings>)).toThrow(
+      expect(() => newDuel(2, { elimination: "invalid" } as unknown as Partial<DuelSettings>)).toThrow(
         'validateSettings: elimination must be either "single" or "double".'
       ))
     test("Minimum opponents", () =>
       expect(() => newDuel(1)).toThrow("validateEntrants: at least 2 entrants are required."))
     test("Double elimination minimum opponents", () =>
-      expect(() => newDuel(2, false, { elimination: "double" })).toThrow(
+      expect(() => newDuel(2, { elimination: "double" })).toThrow(
         "validateSettings: double elimination requires at least 4 opponents."
       ))
     test("Extended finals minimum opponents", () =>
-      expect(() => newDuel(2, false, { enableExtendedFinals: true })).toThrow(
+      expect(() => newDuel(2, { enableExtendedFinals: true })).toThrow(
         "validateSettings: enableExtendedFinals requires at least 4 opponents."
       ))
 
@@ -131,81 +116,23 @@ describe("Duel phase structure and graph", () => {
         "validateEntrants: unicity in entrants id is not respected."
       )
     })
-    test("Duplicate team player IDs", () => {
-      const teams = createTeams(2, 2).map((t) => ({
-        ...t,
-        players: t.players.map((p, index) => ({ ...p, id: `${index + 1}` }))
-      }))
-      const duel = new DuelPhase(F)
-      expect(() => duel.init(teams, duelBaseSettings)).toThrow(
-        "validateEntrants: unicity in entrants id is not respected."
-      )
-    })
-    test("Correct team player IDs", () => {
-      expect(() => newDuel(2, true)).not.toThrow()
-    })
     test("Correct simple elimination Duel", () => {
       expect(() => newDuel(2)).not.toThrow()
     })
     test("Correct double elimination Duel", () => {
-      expect(() => newDuel(4, false, { ...duelBaseSettings, elimination: "double" })).not.toThrow()
+      expect(() => newDuel(4, { ...duelBaseSettings, elimination: "double" })).not.toThrow()
     })
 
-    const initWith = (entrants: Entrant[]) => () => new DuelPhase(F).init(entrants as Entrants, duelBaseSettings)
-    const mixedError = "validateEntrants: entrants must be either all players or all teams."
-    const emptyTeamError = "validateEntrants: every team must have at least one player."
+    const initWith = (entrants: Entrant[]) => () => new DuelPhase(F).init(entrants, duelBaseSettings)
     const emptyIdError = "validateEntrants: entrant ids must not be empty."
-    const unicityError = "validateEntrants: unicity in entrants id is not respected."
 
-    test("Mixed players and teams", () => {
-      const player = createPlayers(2)[1]!
-      const team = createTeams(1, 1)[0]!
-      expect(initWith([player, team])).toThrow(mixedError)
-      expect(initWith([team, player])).toThrow(mixedError)
-    })
-    test("Mixed players and teams don't compile", () => {
-      const player = createPlayers(2)[1]!
-      const team = createTeams(1, 1)[0]!
-      const duel = new DuelPhase(F)
-      // @ts-expect-error: a list that mixes players and teams must be refused at compile time
-      expect(() => duel.init([player, team], duelBaseSettings)).toThrow(mixedError)
-    })
-    test("Team without players", () => {
-      const [team1, team2] = createTeams(2, 1)
-      expect(initWith([{ ...team1!, players: [] }, team2!])).toThrow(emptyTeamError)
-      expect(initWith(createTeams(2, 0))).toThrow(emptyTeamError)
-    })
     test("Empty ids", () => {
       const [player1, player2] = createPlayers(2)
-      const [team1, team2] = createTeams(2, 2)
-      const [teamPlayer, otherTeamPlayer] = team1!.players
       expect(initWith([{ ...player1!, id: "" }, player2!])).toThrow(emptyIdError)
-      expect(initWith([{ ...team1!, id: "" }, team2!])).toThrow(emptyIdError)
-      expect(initWith([{ ...team1!, players: [{ ...teamPlayer!, id: "" }, otherTeamPlayer!] }, team2!])).toThrow(
-        emptyIdError
-      )
     })
     test("Several empty ids report the empty id, not the unicity", () => {
       const players = createPlayers(2).map((p) => ({ ...p, id: "" }))
       expect(initWith(players)).toThrow(emptyIdError)
-    })
-    test("Duplicate team IDs", () => {
-      const teams = createTeams(2, 1).map((t) => ({ ...t, id: "a" }))
-      expect(initWith(teams)).toThrow(unicityError)
-    })
-    test("Duplicate player IDs within a team", () => {
-      const [team1, team2] = createTeams(2, 2)
-      const players = team1!.players.map((p) => ({ ...p, id: "a" }))
-      expect(initWith([{ ...team1!, players }, team2!])).toThrow(unicityError)
-    })
-    test("Player with the ID of a team", () => {
-      const [team1, team2] = createTeams(2, 1)
-      const players = team1!.players.map((p) => ({ ...p, id: team2!.id }))
-      expect(initWith([{ ...team1!, players }, team2!])).toThrow(unicityError)
-    })
-    test("Only players or only teams", () => {
-      expect(initWith(createPlayers(4))).not.toThrow()
-      expect(initWith(createTeams(4, 2))).not.toThrow()
     })
     test("Generated walkovers keep their empty id", () => {
       const firstRound = newDuel(3).getMatches({ bracket: W, round: 1 })
@@ -219,14 +146,14 @@ describe("Duel phase structure and graph", () => {
       expect(MATCH_WIN_RULES).toEqual(["bestOfN", "sumOfSets"])
     })
     test("Empty nbMatchSets", () =>
-      expect(() => newDuel(2, false, { ...duelBaseSettings, nbMatchSets: [] })).toThrow(
+      expect(() => newDuel(2, { ...duelBaseSettings, nbMatchSets: [] })).toThrow(
         "validateSettings: nbMatchSets must not be empty."
       ))
     test("Invalid nbMatchSets", () => {
-      expect(() => newDuel(2, false, { ...duelBaseSettings, nbMatchSets: [-1, 2] })).toThrow(
+      expect(() => newDuel(2, { ...duelBaseSettings, nbMatchSets: [-1, 2] })).toThrow(
         "validateSettings: all nbMatchSets must be greater than 0."
       )
-      expect(() => newDuel(2, false, { ...duelBaseSettings, nbMatchSets: [0, 2] })).toThrow(
+      expect(() => newDuel(2, { ...duelBaseSettings, nbMatchSets: [0, 2] })).toThrow(
         "validateSettings: all nbMatchSets must be greater than 0."
       )
     })
@@ -240,22 +167,22 @@ describe("Duel phase structure and graph", () => {
       ["null", null],
       ["undefined", undefined]
     ])("Non-integer nbMatchSets: %s", (_name, value) => {
-      expect(() => newDuel(2, false, { nbMatchSets: [value] } as unknown as DuelSettings)).toThrow(
+      expect(() => newDuel(2, { nbMatchSets: [value] } as unknown as DuelSettings)).toThrow(
         "validateSettings: all nbMatchSets must be integers."
       )
     })
     test("Positive integers in nbMatchSets", () => {
-      expect(() => newDuel(2, false, { nbMatchSets: [1, 3, 5] })).not.toThrow()
+      expect(() => newDuel(2, { nbMatchSets: [1, 3, 5] })).not.toThrow()
     })
     test("Invalid type", () => {
-      expect(() => newDuel(2, false, { type: "invalid" } as unknown as DuelSettings)).toThrow(
+      expect(() => newDuel(2, { type: "invalid" } as unknown as DuelSettings)).toThrow(
         "validateSettings: type must be one of duel, ffa, roundrobin."
       )
     })
     test("Invalid matchWinRule", () => {
-      expect(() =>
-        newDuel(2, false, { ...duelBaseSettings, matchWinRule: "invalid" } as unknown as DuelSettings)
-      ).toThrow("validateSettings: matchWinRule must be one of bestOfN, sumOfSets.")
+      expect(() => newDuel(2, { ...duelBaseSettings, matchWinRule: "invalid" } as unknown as DuelSettings)).toThrow(
+        "validateSettings: matchWinRule must be one of bestOfN, sumOfSets."
+      )
     })
 
     describe("allMatchesSameSetsNumber", () => {
@@ -270,7 +197,7 @@ describe("Duel phase structure and graph", () => {
         expect(setsPerMatch(duel)).toEqual([2, 2, 2])
       })
       test("Keeps false when provided", () => {
-        const duel = newDuel(4, false, { nbMatchSets: [2, 3], allMatchesSameSetsNumber: false })
+        const duel = newDuel(4, { nbMatchSets: [2, 3], allMatchesSameSetsNumber: false })
         expect(duel.settings.allMatchesSameSetsNumber).toBe(false)
         expect(setsPerMatch(duel)).toEqual([2, 2, 3])
       })
@@ -282,65 +209,61 @@ describe("Duel phase structure and graph", () => {
       // Single elimination
       expect(newDuel(4).getMatches().length).toBe(3)
       expect(newDuel(8).getMatches().length).toBe(7)
-      expect(newDuel(8, false, { enableExtendedFinals: true }).getMatches().length).toBe(8)
+      expect(newDuel(8, { enableExtendedFinals: true }).getMatches().length).toBe(8)
       expect(newDuel(14).getMatches().length).toBe(15)
       // Double elimination
-      expect(newDuel(4, false, { elimination: "double" }).getMatches().length).toBe(6)
-      expect(newDuel(4, false, { elimination: "double", enableExtendedFinals: true }).getMatches().length).toBe(7)
-      expect(newDuel(8, false, { elimination: "double" }).getMatches().length).toBe(14)
-      expect(newDuel(14, false, { elimination: "double" }).getMatches().length).toBe(30)
+      expect(newDuel(4, { elimination: "double" }).getMatches().length).toBe(6)
+      expect(newDuel(4, { elimination: "double", enableExtendedFinals: true }).getMatches().length).toBe(7)
+      expect(newDuel(8, { elimination: "double" }).getMatches().length).toBe(14)
+      expect(newDuel(14, { elimination: "double" }).getMatches().length).toBe(30)
       // Loser bracket matches
       expect(newDuel(4).getMatches({ bracket: L }).length).toBe(0)
-      expect(newDuel(4, false, { enableExtendedFinals: true }).getMatches({ bracket: L }).length).toBe(1)
-      expect(newDuel(4, false, { elimination: "double" }).getMatches({ bracket: L }).length).toBe(3)
+      expect(newDuel(4, { enableExtendedFinals: true }).getMatches({ bracket: L }).length).toBe(1)
+      expect(newDuel(4, { elimination: "double" }).getMatches({ bracket: L }).length).toBe(3)
       expect(
-        newDuel(4, false, { elimination: "double", enableExtendedFinals: true }).getMatches({
+        newDuel(4, { elimination: "double", enableExtendedFinals: true }).getMatches({
           bracket: L
         }).length
       ).toBe(4)
       // Finals
       expect(newDuel(4).getMatches({ bracket: W, round: 2 }).length).toBe(1) // No LB, no bronze
-      expect(newDuel(4, false, { enableExtendedFinals: true }).getMatches({ round: 2 }).length).toBe(1) // No LB, bronze
-      expect(newDuel(4, false, { enableExtendedFinals: true }).getMatches({ bracket: L, round: 1 }).length).toBe(1) // No LB, bronze
-      expect(newDuel(4, false, { elimination: "double" }).getMatches({ bracket: L, round: 3 }).length).toBe(1) // LB, no extended finals
-      expect(newDuel(4, false, { elimination: "double" }).getMatches({ bracket: L, round: 4 }).length).toBe(0) // LB, no extended finals
+      expect(newDuel(4, { enableExtendedFinals: true }).getMatches({ round: 2 }).length).toBe(1) // No LB, bronze
+      expect(newDuel(4, { enableExtendedFinals: true }).getMatches({ bracket: L, round: 1 }).length).toBe(1) // No LB, bronze
+      expect(newDuel(4, { elimination: "double" }).getMatches({ bracket: L, round: 3 }).length).toBe(1) // LB, no extended finals
+      expect(newDuel(4, { elimination: "double" }).getMatches({ bracket: L, round: 4 }).length).toBe(0) // LB, no extended finals
       expect(
-        newDuel(4, false, { elimination: "double", enableExtendedFinals: true }).getMatches({
+        newDuel(4, { elimination: "double", enableExtendedFinals: true }).getMatches({
           bracket: L,
           round: 4
         }).length
       ).toBe(1) // LB, no extended finals
-      expect(
-        newDuel(4, false, { elimination: "double", enableExtendedFinals: false }).getMatches({ round: 4 }).length
-      ).toBe(0)
-      expect(
-        newDuel(4, false, { elimination: "double", enableExtendedFinals: true }).getMatches({ round: 4 }).length
-      ).toBe(1)
+      expect(newDuel(4, { elimination: "double", enableExtendedFinals: false }).getMatches({ round: 4 }).length).toBe(0)
+      expect(newDuel(4, { elimination: "double", enableExtendedFinals: true }).getMatches({ round: 4 }).length).toBe(1)
     })
 
     test("number of sets", () => {
       expect(
-        newDuel(4, false, { nbMatchSets: [1] })
+        newDuel(4, { nbMatchSets: [1] })
           .getMatches()
           .every((m) => m.sets.length === 1)
       ).toBe(true)
       expect(
-        newDuel(4, false, { nbMatchSets: [3] })
+        newDuel(4, { nbMatchSets: [3] })
           .getMatches()
           .every((m) => m.sets.length === 3)
       ).toBe(true)
       expect(
-        newDuel(4, false, { nbMatchSets: [3], elimination: "double" })
+        newDuel(4, { nbMatchSets: [3], elimination: "double" })
           .getMatches({ bracket: L })
           .every((m) => m.sets.length === 1)
       ).toBe(true)
       expect(
-        newDuel(4, false, { nbMatchSets: [3], nbLBMatchSets: [2], elimination: "double" })
+        newDuel(4, { nbMatchSets: [3], nbLBMatchSets: [2], elimination: "double" })
           .getMatches({ bracket: L })
           .every((m) => m.sets.length === 2)
       ).toBe(true)
       expect(
-        newDuel(4, false, {
+        newDuel(4, {
           nbMatchSets: [3],
           nbLBMatchSets: [2],
           elimination: "double",
@@ -350,7 +273,7 @@ describe("Duel phase structure and graph", () => {
           .filter((m) => m.sets.length === 2).length
       ).toBe(1)
       expect(
-        newDuel(4, false, {
+        newDuel(4, {
           nbMatchSets: [3],
           nbLBMatchSets: [2],
           elimination: "double",
@@ -358,7 +281,7 @@ describe("Duel phase structure and graph", () => {
         }).getMatch({ phase: F, bracket: L, round: 3, match: 1 })?.sets.length
       ).toBe(2)
       expect(
-        newDuel(4, false, {
+        newDuel(4, {
           nbMatchSets: [3],
           nbLBMatchSets: [2],
           elimination: "double",
@@ -367,7 +290,7 @@ describe("Duel phase structure and graph", () => {
         }).getMatch({ phase: F, bracket: L, round: 3, match: 1 })?.sets.length
       ).toBe(2)
       expect(
-        newDuel(4, false, {
+        newDuel(4, {
           nbMatchSets: [3],
           nbLBMatchSets: [2],
           elimination: "double",
@@ -376,17 +299,17 @@ describe("Duel phase structure and graph", () => {
         }).getMatch({ phase: F, bracket: L, round: 4, match: 1 })?.sets.length
       ).toBe(2)
       expect(
-        newDuel(8, false, { nbMatchSets: [2, 3], allMatchesSameSetsNumber: false })
+        newDuel(8, { nbMatchSets: [2, 3], allMatchesSameSetsNumber: false })
           .getMatches()
           .filter((m) => m.sets.length === 1).length
       ).toBe(4)
       expect(
-        newDuel(8, false, { nbMatchSets: [2, 3], allMatchesSameSetsNumber: false })
+        newDuel(8, { nbMatchSets: [2, 3], allMatchesSameSetsNumber: false })
           .getMatches()
           .filter((m) => m.sets.length === 2).length
       ).toBe(2)
       expect(
-        newDuel(8, false, { nbMatchSets: [2, 3], allMatchesSameSetsNumber: false })
+        newDuel(8, { nbMatchSets: [2, 3], allMatchesSameSetsNumber: false })
           .getMatches()
           .filter((m) => m.sets.length === 3).length
       ).toBe(1)
@@ -404,9 +327,8 @@ describe("Duel phase structure and graph", () => {
           .at(0)
       ).toStrictEqual({
         id: "",
-        type: "player",
         forfeit: true,
-        stats: {}
+        stats: zeroStats
       })
     })
   })
@@ -444,7 +366,7 @@ describe("Duel phase scoring and progression", () => {
       expect(() => score(duel, W, 2, 1, 1, "4", 0)).not.toThrow()
     })
     test("Match scoring with inverted scoring and sumOfSets", () => {
-      const duelSum = newDuel(4, false, { invertedScoring: true, matchWinRule: "sumOfSets", nbMatchSets: [3] })
+      const duelSum = newDuel(4, { invertedScoring: true, matchWinRule: "sumOfSets", nbMatchSets: [3] })
       play(duelSum, [
         { b: W, r: 1, m: 1, s: 1, p1: "1", p2: "4", sc1: 3, sc2: 0 },
         { b: W, r: 1, m: 1, s: 2, p1: "1", p2: "4", sc1: 3, sc2: 3 },
@@ -459,7 +381,7 @@ describe("Duel phase scoring and progression", () => {
     })
 
     test("Match scoring with normal scoring and bestOfN", () => {
-      const duelBest = newDuel(4, false, { matchWinRule: "bestOfN", nbMatchSets: [3] })
+      const duelBest = newDuel(4, { matchWinRule: "bestOfN", nbMatchSets: [3] })
       play(duelBest, [
         { b: W, r: 1, m: 1, s: 1, p1: "1", p2: "4", sc1: 3, sc2: 0 },
         { b: W, r: 1, m: 1, s: 2, p1: "1", p2: "4", sc1: 4, sc2: 3 }
@@ -483,7 +405,7 @@ describe("Duel phase scoring and progression", () => {
   })
 
   test("Opponents progression no downmix", () => {
-    const duel = newDuel(4, false, { enableExtendedFinals: true, elimination: "double" })
+    const duel = newDuel(4, { enableExtendedFinals: true, elimination: "double" })
     play(duel, [{ b: W, r: 1, m: 1, p1: "1", p2: "4", sc1: 3, sc2: 1 }])
     expect(duel.getMatch({ phase: F, bracket: W, round: 2, match: 1 })?.opponents[0]?.id).toBe("1")
     expect(duel.getMatch({ phase: F, bracket: L, round: 1, match: 1 })?.opponents[1]?.id).toBe("4")
@@ -512,9 +434,9 @@ describe("Duel phase scoring and progression", () => {
   })
 
   test("Opponents progression downmix", () => {
-    const duelDownmix = newDuel(16, false, { elimination: "double", downmix: true })
+    const duelDownmix = newDuel(16, { elimination: "double", downmix: true })
     autoPlay(duelDownmix)
-    const duelNoDownmix = newDuel(16, false, { elimination: "double", downmix: false })
+    const duelNoDownmix = newDuel(16, { elimination: "double", downmix: false })
     autoPlay(duelNoDownmix)
 
     expect(
@@ -525,16 +447,8 @@ describe("Duel phase scoring and progression", () => {
     ).toStrictEqual(["8", "9", "12", "5", "7", "10", "11", "6"])
   })
 
-  test("Forfeit in team", () => {
-    const duel = newDuel(4, true)
-    duel.toggleForfeit("1-1")
-    expect(duel.getOpponents(true, false).find((o) => o.id === "1")?.forfeit).toBe(false)
-    duel.toggleForfeit("1-2")
-    expect(duel.getOpponents(true, false).find((o) => o.id === "1")?.forfeit).toBe(true)
-  })
-
   test("Forfeit and WO - scoring and progression", () => {
-    const duel = newDuel(6, false, { enableExtendedFinals: true, elimination: "double" })
+    const duel = newDuel(6, { enableExtendedFinals: true, elimination: "double" })
     expect(duel.getMatch({ phase: F, bracket: W, round: 1, match: 1 })?.opponents.map((o) => o?.id)).toStrictEqual([
       "1",
       ""
@@ -641,7 +555,7 @@ describe("Duel phase scoring and progression", () => {
       expect(duel.getCompletion()).toBe(1)
     })
     test("Duel results - single elimination, extended finals", () => {
-      const duel = newDuel(4, false, { enableExtendedFinals: true, elimination: "single" })
+      const duel = newDuel(4, { enableExtendedFinals: true, elimination: "single" })
       autoPlay(duel)
       expect(duel.getResult().map((r) => ({ id: r.opponentId, forfeit: r.forfeit, rank: r.rank }))).toStrictEqual([
         { id: "1", forfeit: false, rank: 1 },
@@ -652,7 +566,7 @@ describe("Duel phase scoring and progression", () => {
       expect(duel.getCompletion()).toBe(1)
     })
     test("Duel results - double elimination, extended finals", () => {
-      const duel = newDuel(4, false, { enableExtendedFinals: true, elimination: "double" })
+      const duel = newDuel(4, { enableExtendedFinals: true, elimination: "double" })
       autoPlay(duel)
       expect(duel.getResult().map((r) => ({ id: r.opponentId, forfeit: r.forfeit, rank: r.rank }))).toStrictEqual([
         { id: "1", forfeit: false, rank: 1 },
@@ -663,7 +577,7 @@ describe("Duel phase scoring and progression", () => {
       expect(duel.getCompletion()).toBe(1)
     })
     test("Duel results - WO & FF, double elimination, extended finals", () => {
-      const duel = newDuel(7, false, { enableExtendedFinals: true, elimination: "double" })
+      const duel = newDuel(7, { enableExtendedFinals: true, elimination: "double" })
       autoPlay(duel, W)
       duel.toggleForfeit("4")
       autoPlay(duel)
@@ -679,7 +593,7 @@ describe("Duel phase scoring and progression", () => {
       expect(duel.getCompletion()).toBe(1)
     })
     test("Duel results - WO & FF, inverted score", () => {
-      const duel = newDuel(7, false, { invertedScoring: true })
+      const duel = newDuel(7, { invertedScoring: true })
       autoPlay(duel, W)
       duel.toggleForfeit("4")
       autoPlay(duel)
@@ -695,7 +609,7 @@ describe("Duel phase scoring and progression", () => {
       expect(duel.getCompletion()).toBe(1)
     })
     test("Duel results - WO & FF, 3 sets bestOfN", () => {
-      const duel = newDuel(7, false, {
+      const duel = newDuel(7, {
         nbMatchSets: [3],
         nbLBMatchSets: [3],
         enableExtendedFinals: true,
@@ -716,7 +630,7 @@ describe("Duel phase scoring and progression", () => {
       expect(duel.getCompletion()).toBe(1)
     })
     test("Duel results - WO & FF, 3 sets sumOf", () => {
-      const duel = newDuel(7, false, {
+      const duel = newDuel(7, {
         nbMatchSets: [3],
         nbLBMatchSets: [3],
         enableExtendedFinals: true,
@@ -807,11 +721,8 @@ describe("Duel phase scoring and progression", () => {
         .map((r) => r.opponentId)
         .sort()
 
-    test("One entry per player in a phase of players", () => {
+    test("One entry per opponent", () => {
       expect(ids(newDuel(4))).toStrictEqual(["1", "2", "3", "4"])
-    })
-    test("One entry per player in a phase of teams, none for the teams", () => {
-      expect(ids(newDuel(4, true))).toStrictEqual(["1-1", "1-2", "2-1", "2-2", "3-1", "3-2", "4-1", "4-2"])
     })
     test("No entry for the walkover", () => {
       expect(ids(newDuel(3))).toStrictEqual(["1", "2", "3"])
@@ -839,7 +750,7 @@ describe("Duel phase scoring and progression", () => {
       expect(duel.getResult().map((r) => r.rank)).toStrictEqual([1, 2, 3, 3])
     })
     test("Rank following tied players", () => {
-      const duel = newDuel(7, false, { enableExtendedFinals: true, elimination: "double" })
+      const duel = newDuel(7, { enableExtendedFinals: true, elimination: "double" })
       autoPlay(duel, W)
       duel.toggleForfeit("4")
       autoPlay(duel)
@@ -880,13 +791,13 @@ describe("Duel phase scoring and progression", () => {
       const duel = newDuel(4)
       play(duel, [semiFinals[0]!])
       const expected = duel.getResult()
-      const statsBefore = duel.getOpponents(true, true).find((o) => o.id === "1")
+      const statsBefore = duel.getOpponents(true).find((o) => o.id === "1")
       const read = duel.getResult()
       const entry = read.find((r) => r.opponentId === "1")!
       entry.rank = 99
       entry.telemetry.matchesWon = 99
       expect(duel.getResult()).toStrictEqual(expected)
-      expect(duel.getOpponents(true, true).find((o) => o.id === "1")).toStrictEqual(statsBefore)
+      expect(duel.getOpponents(true).find((o) => o.id === "1")).toStrictEqual(statsBefore)
     })
     test("Results read before a score keep their values", () => {
       const duel = newDuel(4)
@@ -929,51 +840,6 @@ describe("Duel phase scoring and progression", () => {
         ratioPoints: ((7 - 1) / (7 + 1) + 1) / 2
       })
     })
-    test("Opponent telemetry - team player", () => {
-      const teamDuel = newDuel(7, true)
-      play(teamDuel, [
-        { b: W, r: 1, m: 2, p1: "4", p2: "5", sc1: 2, sc2: 3 },
-        { b: W, r: 1, m: 3, p1: "2", p2: "7", sc1: 2, sc2: 7 },
-        { b: W, r: 2, m: 1, p1: "1", p2: "5", sc1: 7, sc2: 1 }
-      ])
-      expect(teamDuel.getResult().find((r) => r.opponentId === "1-1")?.telemetry.matchesRemaining).toBe(1)
-      teamDuel.toggleForfeit("1-1")
-      play(teamDuel, [
-        { b: W, r: 1, m: 4, p1: "3", p2: "6", sc1: 3, sc2: 0 },
-        { b: W, r: 2, m: 2, p1: "7", p2: "3", sc1: 3, sc2: 0 },
-        { b: W, r: 3, m: 1, p1: "1", p2: "7", sc1: 1, sc2: 0 }
-      ])
-      expect(teamDuel.getCompletion()).toBe(1)
-      const results = teamDuel.getResult()
-      expect(results.find((r) => r.opponentId === "1-1")?.telemetry).toStrictEqual({
-        matchesPlayed: 1,
-        matchesRemaining: 0,
-        matchesWon: 1,
-        matchesLost: 0,
-        matchesDraw: 0,
-        setsPlayed: 1,
-        setsWon: 1,
-        setsLost: 0,
-        setsDraw: 0,
-        scoredPoints: 7,
-        concededPoints: 1,
-        ratioPoints: ((7 - 1) / (7 + 1) + 1) / 2
-      })
-      expect(results.find((r) => r.opponentId === "1-2")?.telemetry).toStrictEqual({
-        matchesPlayed: 2,
-        matchesRemaining: 0,
-        matchesWon: 2,
-        matchesLost: 0,
-        matchesDraw: 0,
-        setsPlayed: 2,
-        setsWon: 2,
-        setsLost: 0,
-        setsDraw: 0,
-        scoredPoints: 8,
-        concededPoints: 1,
-        ratioPoints: ((8 - 1) / (8 + 1) + 1) / 2
-      })
-    })
   })
 })
 
@@ -993,29 +859,12 @@ describe("Duel forfeit", () => {
       expect(opponentIds(duel, final)).toStrictEqual(["4", undefined])
     })
     test("A forfeit on a match with several sets", () => {
-      const duel = newDuel(4, false, { nbMatchSets: [3] })
+      const duel = newDuel(4, { nbMatchSets: [3] })
       duel.toggleForfeit("1")
       expect(setScores(duel, firstMatch)).toStrictEqual([{ "1": "FF" }, { "1": "FF" }, { "1": "FF" }])
     })
-    test("A team's forfeit is written under the team id", () => {
-      const duel = newDuel(4, true)
-      duel.toggleForfeit("1")
-      expect(setScores(duel, firstMatch)).toStrictEqual([{ "1": "FF" }])
-    })
-    test("The forfeit of a team's last player", () => {
-      const duel = newDuel(4, true)
-      duel.toggleForfeit("1-1")
-      duel.toggleForfeit("1-2")
-      expect(setScores(duel, firstMatch)).toStrictEqual([{ "1": "FF" }])
-    })
-    test("The forfeit of part of a team's players", () => {
-      const duel = newDuel(4, true)
-      duel.toggleForfeit("1-1")
-      expect(duel.getMatch(firstMatch)?.complete).toBe(false)
-      expect(setScores(duel, firstMatch)).toStrictEqual([{}])
-    })
     test("A forfeit with inverted scoring", () => {
-      const duel = newDuel(4, false, { invertedScoring: true })
+      const duel = newDuel(4, { invertedScoring: true })
       duel.toggleForfeit("1")
       expect(setScores(duel, firstMatch)).toStrictEqual([{ "1": "FF" }])
       expect(opponentIds(duel, final)).toStrictEqual(["4", undefined])
@@ -1024,7 +873,7 @@ describe("Duel forfeit", () => {
 
   describe("No score given to the opponent", () => {
     test("The opponent has no score", () => {
-      const duel = newDuel(4, false, { nbMatchSets: [3] })
+      const duel = newDuel(4, { nbMatchSets: [3] })
       duel.toggleForfeit("1")
       duel.getMatch(firstMatch)?.sets.forEach((s) => expect(s.scores).not.toHaveProperty("4"))
     })
@@ -1039,7 +888,7 @@ describe("Duel forfeit", () => {
 
   describe("Sets replaced by a forfeit during a match", () => {
     test("A forfeit after a played set", () => {
-      const duel = newDuel(4, false, { nbMatchSets: [3] })
+      const duel = newDuel(4, { nbMatchSets: [3] })
       play(duel, [{ b: W, r: 1, m: 1, s: 1, p1: "1", p2: "4", sc1: 5, sc2: 2 }])
       duel.toggleForfeit("1")
       expect(setScores(duel, firstMatch)).toStrictEqual([{ "1": "FF" }, { "1": "FF" }, { "1": "FF" }])
@@ -1069,7 +918,7 @@ describe("Duel forfeit", () => {
       const duel = newDuel(4)
       duel.toggleForfeit("1")
       duel.toggleForfeit("1")
-      expect(duel.getOpponents(true, false).find((o) => o.id === "1")?.forfeit).toBe(false)
+      expect(duel.getOpponents(true).find((o) => o.id === "1")?.forfeit).toBe(false)
       expect(setScores(duel, firstMatch)).toStrictEqual([{ "1": "FF" }])
       expect(duel.getMatch(firstMatch)?.complete).toBe(true)
     })
@@ -1142,25 +991,19 @@ describe("Duel forfeit", () => {
       expect(stats(duel, "4")).toMatchObject(noMatchCounted)
     })
     test("A forfeit after a played set", () => {
-      const duel = newDuel(4, false, { nbMatchSets: [3] })
+      const duel = newDuel(4, { nbMatchSets: [3] })
       play(duel, [{ b: W, r: 1, m: 1, s: 1, p1: "1", p2: "4", sc1: 5, sc2: 2 }])
       duel.toggleForfeit("1")
       expect(stats(duel, "1")).toMatchObject(noMatchCounted)
       expect(stats(duel, "4")).toMatchObject(noMatchCounted)
     })
     test("A forfeit after a played set with inverted scoring", () => {
-      const duel = newDuel(4, false, { nbMatchSets: [3], invertedScoring: true })
+      const duel = newDuel(4, { nbMatchSets: [3], invertedScoring: true })
       play(duel, [{ b: W, r: 1, m: 1, s: 1, p1: "1", p2: "4", sc1: 5, sc2: 2 }])
       duel.toggleForfeit("1")
       expect(stats(duel, "4")?.matchesLost).toBe(0)
       expect(stats(duel, "1")).toMatchObject(noMatchCounted)
       expect(stats(duel, "4")).toMatchObject(noMatchCounted)
-    })
-    test("A forfeit after a played set, for every player of the teams", () => {
-      const duel = newDuel(4, true, { nbMatchSets: [3] })
-      play(duel, [{ b: W, r: 1, m: 1, s: 1, p1: "1", p2: "4", sc1: 5, sc2: 2 }])
-      duel.toggleForfeit("1")
-      ;["1-1", "1-2", "4-1", "4-2"].forEach((id) => expect(stats(duel, id)).toMatchObject(noMatchCounted))
     })
     test("A forfeit after a played match", () => {
       const duel = newDuel(4)
@@ -1182,7 +1025,7 @@ describe("Duel forfeit", () => {
 
   describe("Double forfeit in a match", () => {
     test("Double forfeit in the loser bracket", () => {
-      const duel = newDuel(8, false, { elimination: "double" })
+      const duel = newDuel(8, { elimination: "double" })
       duel.toggleForfeit("1")
       duel.toggleForfeit("4")
       const match = duel.getMatch(matchId(L, 1, 1))
@@ -1194,7 +1037,7 @@ describe("Duel forfeit", () => {
       expect(opponentIds(duel, matchId(L, 2, 1))).toStrictEqual([undefined, "1"])
     })
     test("Double forfeit in the bronze final", () => {
-      const duel = newDuel(4, false, { enableExtendedFinals: true })
+      const duel = newDuel(4, { enableExtendedFinals: true })
       duel.toggleForfeit("1")
       duel.toggleForfeit("2")
       const match = duel.getMatch(matchId(L, 1, 1))
@@ -1204,7 +1047,7 @@ describe("Duel forfeit", () => {
       expect(match?.complete).toBe(true)
     })
     test("The next match of the forfeiting opponent who moves on", () => {
-      const duel = newDuel(8, false, { elimination: "double" })
+      const duel = newDuel(8, { elimination: "double" })
       duel.toggleForfeit("1")
       duel.toggleForfeit("4")
       // The loser of this match joins "1" in the next loser bracket round
@@ -1232,7 +1075,7 @@ describe("Duel forfeit", () => {
     }
 
     test("Grand final without extended finals", () => {
-      const duel = newDuel(4, false, { elimination: "double" })
+      const duel = newDuel(4, { elimination: "double" })
       const [, second] = reachGrandFinal(duel)
       expect(duel.getCompletion()).toBe(5 / 6)
       duel.toggleForfeit(second!)
@@ -1240,7 +1083,7 @@ describe("Duel forfeit", () => {
       expect(duel.getCompletion()).toBe(1)
     })
     test("Forfeit of the opponent in position 2 with extended finals", () => {
-      const duel = newDuel(4, false, { elimination: "double", enableExtendedFinals: true })
+      const duel = newDuel(4, { elimination: "double", enableExtendedFinals: true })
       const [, second] = reachGrandFinal(duel)
       duel.toggleForfeit(second!)
       expect(duel.getMatch(gf1)?.complete).toBe(true)
@@ -1249,7 +1092,7 @@ describe("Duel forfeit", () => {
       expect(duel.getCompletion()).toBe(1)
     })
     test("Forfeit of the opponent in position 1 with extended finals", () => {
-      const duel = newDuel(4, false, { elimination: "double", enableExtendedFinals: true })
+      const duel = newDuel(4, { elimination: "double", enableExtendedFinals: true })
       const [first] = reachGrandFinal(duel)
       duel.toggleForfeit(first!)
       expect(duel.getMatch(gf1)?.complete).toBe(true)
@@ -1268,7 +1111,7 @@ describe("Duel forfeit", () => {
       expect(setScores(duel, firstMatch)).toStrictEqual([{}])
     })
     test("A forfeiting opponent against a walkover", () => {
-      const duel = newDuel(6, false, { elimination: "double" })
+      const duel = newDuel(6, { elimination: "double" })
       duel.toggleForfeit("5")
       const lbMatch = matchId(L, 1, 1)
       expect(opponentIds(duel, lbMatch)).toStrictEqual(["5", ""])
@@ -1277,7 +1120,7 @@ describe("Duel forfeit", () => {
       expect(opponentIds(duel, matchId(L, 2, 1))).toContain("5")
     })
     test("A parent correction replaces the opponent of a complete walkover match", () => {
-      const duel = newDuel(6, false, { elimination: "double" })
+      const duel = newDuel(6, { elimination: "double" })
       const lbMatch = matchId(L, 1, 1)
       play(duel, [{ b: W, r: 1, m: 2, p1: "4", p2: "5", sc1: 3, sc2: 1 }])
       expect(opponentIds(duel, matchId(L, 2, 1))).toContain("5")
@@ -1290,7 +1133,7 @@ describe("Duel forfeit", () => {
     })
     test("A played match after a walkover locks the parents of the walkover match", () => {
       // "9" loses to "8", passes the walkover in loser bracket round 1, then plays loser bracket round 2
-      const duel = newDuel(10, false, { elimination: "double" })
+      const duel = newDuel(10, { elimination: "double" })
       play(duel, [
         { b: W, r: 1, m: 2, p1: "8", p2: "9", sc1: 3, sc2: 1 },
         { b: W, r: 2, m: 2, p1: "4", p2: "5", sc1: 3, sc2: 1 },
@@ -1315,48 +1158,17 @@ describe("Opponent creation", () => {
   test("newTelemetry returns a new object on each call", () => {
     expect(newTelemetry()).not.toBe(newTelemetry())
   })
-  test("newOpponents creates a player", () => {
-    expect(newOpponents([{ type: "player", id: "a" }])).toStrictEqual([
-      { type: "player", id: "a", forfeit: false, stats: zeroStats }
-    ])
+  test("newOpponents creates an opponent", () => {
+    expect(newOpponents([{ id: "a" }])).toStrictEqual([{ id: "a", forfeit: false, stats: zeroStats }])
   })
-  test("newOpponents creates a team and its players", () => {
-    expect(newOpponents([{ type: "team", id: "t", players: [{ type: "player", id: "a" }] }])).toStrictEqual([
-      {
-        type: "team",
-        id: "t",
-        forfeit: false,
-        players: [{ type: "player", id: "a", forfeit: false, stats: zeroStats }]
-      }
-    ])
-  })
-  test("newOpponents drops undeclared fields, including on team players", () => {
+  test("newOpponents drops undeclared fields", () => {
     const entrants = [
-      { type: "player", id: "a", name: "Alice", forfeit: true, stats: { ...zeroStats, matchesWon: 9 } },
-      {
-        type: "team",
-        id: "t",
-        name: "Team",
-        forfeit: true,
-        stats: { ...zeroStats, matchesWon: 9 },
-        players: [{ type: "player", id: "b", name: "Bob", forfeit: true, stats: { ...zeroStats, matchesWon: 9 } }]
-      }
+      { id: "a", name: "Alice", forfeit: true, stats: { ...zeroStats, matchesWon: 9 } }
     ] as unknown as Entrant[]
-    expect(newOpponents(entrants)).toStrictEqual([
-      { type: "player", id: "a", forfeit: false, stats: zeroStats },
-      {
-        type: "team",
-        id: "t",
-        forfeit: false,
-        players: [{ type: "player", id: "b", forfeit: false, stats: zeroStats }]
-      }
-    ])
+    expect(newOpponents(entrants)).toStrictEqual([{ id: "a", forfeit: false, stats: zeroStats }])
   })
-  test("newOpponents gives each player its own stats", () => {
-    const [first, second] = newOpponents([
-      { type: "player", id: "a" },
-      { type: "player", id: "b" }
-    ]) as PlayerOpponent[]
+  test("newOpponents gives each opponent its own stats", () => {
+    const [first, second] = newOpponents([{ id: "a" }, { id: "b" }])
     expect(first!.stats).not.toBe(second!.stats)
   })
 })
@@ -1385,25 +1197,19 @@ describe("Phase lifecycle", () => {
   })
 
   describe("Opponents created from entrants", () => {
-    const player = (id: string) => ({ type: "player", id, forfeit: false, stats: zeroStats })
+    const player = (id: string) => ({ id, forfeit: false, stats: zeroStats })
 
-    test("Players keep their type and id, without forfeit and with zeroed stats", () => {
+    test("Initial opponents have only their id, no forfeit and zeroed stats", () => {
       const duel = new DuelPhase(F)
       duel.init(createPlayers(4), duelBaseSettings)
-      expect(duel.getOpponents(true, false)).toStrictEqual(["1", "2", "3", "4"].map(player))
+      const opponents = duel.getOpponents(true)
+      expect(opponents).toStrictEqual(["1", "2", "3", "4"].map(player))
+      opponents.forEach((o) => expect(Object.keys(o).sort()).toStrictEqual(["forfeit", "id", "stats"]))
     })
-    test("Teams keep their type and id, without stats, and their players start from zero", () => {
-      const duel = new DuelPhase(F)
-      duel.init(createTeams(2, 2), duelBaseSettings)
-      expect(duel.getOpponents(true, false)).toStrictEqual([
-        { type: "team", id: "1", forfeit: false, players: ["1-1", "1-2"].map(player) },
-        { type: "team", id: "2", forfeit: false, players: ["2-1", "2-2"].map(player) }
-      ])
-    })
-    test("Only the players of a played match have their stats updated", () => {
+    test("Only the opponents of a played match have their stats updated", () => {
       const duel = newDuel(4)
       play(duel, [{ b: W, r: 1, m: 1, p1: "1", p2: "4", sc1: 3, sc2: 1 }])
-      const opponent = (id: string) => duel.getOpponents(true, true).find((o) => o.id === id)
+      const opponent = (id: string) => duel.getOpponents(true).find((o) => o.id === id)
       expect(opponent("1")).toMatchObject({ stats: { matchesWon: 1, scoredPoints: 3 } })
       expect(opponent("4")).toMatchObject({ stats: { matchesLost: 1, scoredPoints: 1 } })
       expect(opponent("2")).toStrictEqual(player("2"))
@@ -1415,7 +1221,7 @@ describe("Phase lifecycle", () => {
     const nonZeroStats = { ...zeroStats, matchesWon: 9, scoredPoints: 9 }
     const initWith = (entrants: unknown[], settings: DuelSettings = duelBaseSettings) => {
       const duel = new DuelPhase(F)
-      duel.init(entrants as PlayerEntrant[], settings)
+      duel.init(entrants as Entrant[], settings)
       return duel
     }
     const withFirst = (fields: object) => {
@@ -1425,55 +1231,41 @@ describe("Phase lifecycle", () => {
 
     test("A forfeit provided as input is ignored", () => {
       const duel = initWith(withFirst({ forfeit: true }))
-      expect(duel.getOpponents(true, false).find((o) => o.id === "1")?.forfeit).toBe(false)
+      expect(duel.getOpponents(true).find((o) => o.id === "1")?.forfeit).toBe(false)
       expect(duel.getMatches({ bracket: W, round: 1 }).some((m) => m.complete)).toBe(false)
       expect(duel.getCompletion()).toBe(0)
     })
     test("Stats provided as input are ignored", () => {
       const duel = initWith(withFirst({ stats: nonZeroStats }))
-      expect(duel.getOpponents(true, false).find((o) => o.id === "1")).toMatchObject({ stats: zeroStats })
+      expect(duel.getOpponents(true).find((o) => o.id === "1")).toMatchObject({ stats: zeroStats })
     })
     test("A free field provided as input is ignored", () => {
       const duel = initWith(withFirst({ name: "Alice" }))
-      expect(duel.getOpponents(true, false).find((o) => o.id === "1")).not.toHaveProperty("name")
+      expect(duel.getOpponents(true).find((o) => o.id === "1")).not.toHaveProperty("name")
     })
-    test("Undeclared fields on a team and on its players are ignored", () => {
-      const [team, ...others] = createTeams(4, 2)
-      const [teamPlayer, ...otherPlayers] = team!.players
-      const undeclared = { forfeit: true, name: "Alice", stats: nonZeroStats }
-      const duel = initWith([
-        { ...team!, ...undeclared, players: [{ ...teamPlayer!, ...undeclared }, ...otherPlayers] },
-        ...others
-      ])
-      const opponents = duel.getOpponents(true, false)
-      expect(opponents[0]).toStrictEqual({
-        type: "team",
-        id: "1",
-        forfeit: false,
-        players: [
-          { type: "player", id: "1-1", forfeit: false, stats: zeroStats },
-          { type: "player", id: "1-2", forfeit: false, stats: zeroStats }
-        ]
-      })
-      expect(duel.getMatches({ bracket: W, round: 1 }).some((m) => m.complete)).toBe(false)
+    test("A team provided by a JavaScript caller is a simple opponent", () => {
+      const teams = ["a", "b", "c", "d"].map((id) => ({ type: "team", id, players: [{ id: `${id}-1` }] }))
+      const duel = new DuelPhase(F)
+      expect(() => duel.init(teams as unknown as Entrant[], duelBaseSettings)).not.toThrow()
+      expect(duel.getOpponents(true)).toStrictEqual(
+        ["a", "b", "c", "d"].map((id) => ({ id, forfeit: false, stats: zeroStats }))
+      )
+      expect(
+        duel
+          .getResult()
+          .map((r) => r.opponentId)
+          .sort()
+      ).toStrictEqual(["a", "b", "c", "d"])
     })
   })
 
   describe("Forfeit before the phase starts", () => {
     const final = { phase: F, bracket: W, round: 2, match: 1 }
 
-    test("A player's forfeit before any score progresses its match", () => {
+    test("An opponent's forfeit before any score progresses its match", () => {
       const duel = newDuel(4)
       duel.toggleForfeit("1")
-      expect(duel.getMatch(firstMatch)?.complete).toBe(true)
-      expect(duel.getMatch(final)?.opponents.map((o) => o?.id)).toContain("4")
-      expect(duel.getOpponents(true, false).find((o) => o.id === "1")?.forfeit).toBe(true)
-    })
-    test("A team's forfeit before any score progresses its match", () => {
-      const duel = newDuel(4, true)
-      duel.toggleForfeit("1")
-      const team = duel.getOpponents(true, false).find((o) => o.id === "1")
-      expect(team).toMatchObject({ forfeit: true, players: [{ forfeit: true }, { forfeit: true }] })
+      expect(duel.getOpponents(true).find((o) => o.id === "1")?.forfeit).toBe(true)
       expect(duel.getMatch(firstMatch)?.complete).toBe(true)
       expect(duel.getMatch(final)?.opponents.map((o) => o?.id)).toContain("4")
     })
@@ -1484,34 +1276,12 @@ describe("Phase lifecycle", () => {
       const players = createPlayers(4)
       const duel = new DuelPhase(F)
       duel.init(players, duelBaseSettings)
-      const before = duel.getOpponents(true, false)
+      const before = duel.getOpponents(true)
 
-      players[0] = { type: "player", id: "replaced" }
+      players[0] = { id: "replaced" }
       players.pop()
 
-      expect(duel.getOpponents(true, false)).toEqual(before)
-    })
-    test("Changing the caller's teams after init doesn't change the phase", () => {
-      const teams = createTeams(4, 2)
-      const duel = new DuelPhase(F)
-      duel.init(teams, duelBaseSettings)
-      const before = duel.getOpponents(true, false)
-
-      teams[0] = { type: "team", id: "replaced", players: [] }
-      teams.pop()
-
-      expect(duel.getOpponents(true, false)).toEqual(before)
-    })
-    test("Changing the players of a caller's team after init doesn't change the phase", () => {
-      const teams = createTeams(4, 2)
-      const duel = new DuelPhase(F)
-      duel.init(teams, duelBaseSettings)
-      const before = duel.getOpponents(true, false)
-
-      teams[0]!.players[0] = { type: "player", id: "replaced" }
-      teams[0]!.players.pop()
-
-      expect(duel.getOpponents(true, false)).toEqual(before)
+      expect(duel.getOpponents(true)).toEqual(before)
     })
     test("Changing the caller's settings after init doesn't change the phase", () => {
       const settings: DuelSettings = { ...duelBaseSettings, nbMatchSets: [1], nbLBMatchSets: [1] }
@@ -1549,18 +1319,6 @@ describe("Phase lifecycle", () => {
         "validateSettings: double elimination requires at least 4 opponents."
       ],
       [
-        "mixed players and teams",
-        [createPlayers(2)[1]!, createTeams(1, 1)[0]!],
-        duelBaseSettings,
-        "validateEntrants: entrants must be either all players or all teams."
-      ],
-      [
-        "team without players",
-        createTeams(2, 0),
-        duelBaseSettings,
-        "validateEntrants: every team must have at least one player."
-      ],
-      [
         "empty id",
         createPlayers(2).map((p) => ({ ...p, id: "" })),
         duelBaseSettings,
@@ -1574,9 +1332,9 @@ describe("Phase lifecycle", () => {
       ]
     ])("Rejected init leaves the phase empty: %s", (_name, entrants, settings, message) => {
       const duel = new DuelPhase(F)
-      expect(() => duel.init(entrants as Entrants, settings)).toThrow(message)
+      expect(() => duel.init(entrants, settings)).toThrow(message)
       expect(duel.getMatches()).toEqual([])
-      expect(duel.getOpponents(true, false)).toEqual([])
+      expect(duel.getOpponents(true)).toEqual([])
       expect(duel.settings).toBeUndefined()
     })
     test("A valid init succeeds after a rejected one", () => {
@@ -1584,7 +1342,7 @@ describe("Phase lifecycle", () => {
       expect(() => duel.init(createPlayers(1), duelBaseSettings)).toThrow()
       duel.init(createPlayers(4), duelBaseSettings)
       expect(duel.getMatches()).toHaveLength(3)
-      expect(duel.getOpponents(true, true)).toHaveLength(4)
+      expect(duel.getOpponents(true)).toHaveLength(4)
     })
     test("A valid init succeeds after rejecting an infinite nbMatchSets", () => {
       const duel = new DuelPhase(F)
@@ -1603,7 +1361,7 @@ describe("Phase lifecycle", () => {
     }
     const snapshot = (duel: DuelPhase) => ({
       matches: duel.getMatches(),
-      opponents: duel.getOpponents(true, false),
+      opponents: duel.getOpponents(true),
       completion: duel.getCompletion(),
       result: duel.getResult()
     })
@@ -1628,8 +1386,7 @@ describe("Phase lifecycle", () => {
       const duel = new DuelPhase(F)
       expect(duel.getMatches()).toEqual([])
       expect(duel.getMatch(firstMatch)).toBeUndefined()
-      expect(duel.getOpponents(true, false)).toEqual([])
-      expect(duel.getOpponents(true, true)).toEqual([])
+      expect(duel.getOpponents(true)).toEqual([])
       expect(duel.getResult()).toEqual([])
       expect(duel.getCompletion()).toBe(0)
       expect(duel.settings).toBeUndefined()
