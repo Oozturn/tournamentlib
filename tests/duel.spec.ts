@@ -795,6 +795,109 @@ describe("Duel phase scoring and progression", () => {
     })
   })
 
+  describe("Phase results", () => {
+    const semiFinals: Step[] = [
+      { b: W, r: 1, m: 1, p1: "1", p2: "4", sc1: 3, sc2: 1 },
+      { b: W, r: 1, m: 2, p1: "2", p2: "3", sc1: 3, sc2: 1 }
+    ]
+    const final: Step = { b: W, r: 2, m: 1, p1: "1", p2: "2", sc1: 3, sc2: 1 }
+    const ids = (duel: DuelPhase) =>
+      duel
+        .getResult()
+        .map((r) => r.opponentId)
+        .sort()
+
+    test("One entry per player in a phase of players", () => {
+      expect(ids(newDuel(4))).toStrictEqual(["1", "2", "3", "4"])
+    })
+    test("One entry per player in a phase of teams, none for the teams", () => {
+      expect(ids(newDuel(4, true))).toStrictEqual(["1-1", "1-2", "2-1", "2-2", "3-1", "3-2", "4-1", "4-2"])
+    })
+    test("No entry for the walkover", () => {
+      expect(ids(newDuel(3))).toStrictEqual(["1", "2", "3"])
+    })
+    test("Read before init", () => {
+      expect(new DuelPhase(F).getResult()).toStrictEqual([])
+    })
+    test("Read before then after init", () => {
+      const duel = new DuelPhase(F)
+      expect(duel.getResult()).toStrictEqual([])
+      duel.init(createPlayers(4), duelBaseSettings)
+      expect(duel.getResult()).toHaveLength(4)
+    })
+    test("Players are tied right after init", () => {
+      const results = newDuel(4).getResult()
+      expect(results).toHaveLength(4)
+      results.forEach((r) => {
+        expect(r.rank).toBe(1)
+        expect(r.forfeit).toBe(false)
+      })
+    })
+    test("Phase fully played", () => {
+      const duel = newDuel(4)
+      play(duel, [...semiFinals, final])
+      expect(duel.getResult().map((r) => r.rank)).toStrictEqual([1, 2, 3, 3])
+    })
+    test("Rank following tied players", () => {
+      const duel = newDuel(7, false, { enableExtendedFinals: true, elimination: "double" })
+      autoPlay(duel, W)
+      duel.toggleForfeit("4")
+      autoPlay(duel)
+      const ranks = duel.getResult().map((r) => r.rank)
+      const firstTied = ranks.indexOf(4)
+      expect(ranks[firstTied + 1]).toBe(4)
+      expect(ranks[firstTied + 2]).toBe(6)
+    })
+    test("Forfeited player is ranked last", () => {
+      const duel = newDuel(4)
+      duel.toggleForfeit("4")
+      const last = duel.getResult().at(-1)
+      expect(last?.opponentId).toBe("4")
+      expect(last?.forfeit).toBe(true)
+    })
+    test("First match played", () => {
+      const duel = newDuel(4)
+      play(duel, [semiFinals[0]!])
+      const first = duel.getResult().filter((r) => r.rank === 1)
+      expect(first.map((r) => r.opponentId)).toStrictEqual(["1"])
+      expect(first[0]!.telemetry.matchesWon).toBe(1)
+    })
+    test("A rejected score leaves the results unchanged", () => {
+      const duel = newDuel(4)
+      play(duel, [...semiFinals, final])
+      const before = duel.getResult()
+      expect(() => score(duel, W, 1, 1, 1, "4", 5)).toThrow("Match is locked")
+      expect(duel.getResult()).toStrictEqual(before)
+    })
+    test("Successive reads return equal results", () => {
+      const duel = newDuel(4)
+      play(duel, [semiFinals[0]!])
+      const first = duel.getResult()
+      expect(duel.getResult()).toStrictEqual(first)
+      expect(duel.getResult()).toStrictEqual(first)
+    })
+    test("Editing the read results has no effect on the phase", () => {
+      const duel = newDuel(4)
+      play(duel, [semiFinals[0]!])
+      const expected = duel.getResult()
+      const statsBefore = duel.getOpponents(true, true).find((o) => o.id === "1")
+      const read = duel.getResult()
+      const entry = read.find((r) => r.opponentId === "1")!
+      entry.rank = 99
+      entry.telemetry.matchesWon = 99
+      expect(duel.getResult()).toStrictEqual(expected)
+      expect(duel.getOpponents(true, true).find((o) => o.id === "1")).toStrictEqual(statsBefore)
+    })
+    test("Results read before a score keep their values", () => {
+      const duel = newDuel(4)
+      play(duel, [semiFinals[0]!])
+      const before = duel.getResult()
+      const snapshot = JSON.parse(JSON.stringify(before))
+      play(duel, [semiFinals[1]!])
+      expect(before).toStrictEqual(snapshot)
+    })
+  })
+
   describe("Opponent telemetry", () => {
     test("Opponent telemetry - solo player", () => {
       const soloDuel = newDuel(7)
