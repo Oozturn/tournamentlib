@@ -8,7 +8,7 @@ export interface TournamentInterface {
 
   getCurrentPhase(): Phase | undefined
   /**
-   * Results and statistics of each players, also available in players objects
+   * Results and stats of each player, the only place where they are available
    */
   getResult(): Result[]
   /**

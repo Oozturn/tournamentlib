@@ -1,5 +1,5 @@
 ﻿import { PhaseBase } from "../phase"
-import { computeScoreRatio, idToString, newMatch, newTelemetry } from "../tools"
+import { computeScoreRatio, idToString, newMatch } from "../tools"
 import {
   Match,
   MatchId,
@@ -8,6 +8,7 @@ import {
   OpponentId,
   PhaseBracket,
   SetId,
+  type Stats,
   type Opponent,
   type PhaseSettings,
   type TournamentPhase
@@ -96,7 +97,7 @@ export class DuelPhase extends PhaseBase {
       [1]
     )
     // Populate first round matches with opponents
-    const WOopponent: Opponent = { id: "", forfeit: true, stats: newTelemetry() }
+    const WOopponent: Opponent = { id: "", forfeit: true }
     this.matches.forEach((match, index) => {
       const seed1 = seeds[index * 2]! - 1
       const seed2 = seeds[index * 2 + 1]! - 1
@@ -433,33 +434,105 @@ export class DuelPhase extends PhaseBase {
         throw new Error(`progress: match ${idToString(nextId)} not found.`)
       }
       this.matchesToProgress.delete(idToString(nextId))
-      let winnerId: OpponentId | undefined
-      let loserId: OpponentId | undefined
       if (matchToProgress.opponents.some((o) => o?.id === "")) {
         // A walkover progresses again, complete or not, as a parent correction can replace its other opponent
-        ;({ winnerId, loserId } = this.progressFFMatch(matchToProgress) || {})
+        this.progressFFMatch(matchToProgress)
       } else if (this.isResolvedByForfeit(matchToProgress)) {
         // A match resolved by a forfeit is frozen
         continue
       } else if (matchToProgress.complete) {
         // A played match stays played, even if one of its opponents forfeited since
-        ;({ winnerId, loserId } = this.progressCompleteMatch(matchToProgress) || {})
+        this.progressCompleteMatch(matchToProgress)
       } else if (matchToProgress.opponents.some((o) => o?.forfeit === true)) {
-        ;({ winnerId, loserId } = this.progressFFMatch(matchToProgress) || {})
+        this.progressFFMatch(matchToProgress)
       } else {
         this.progressIncompleteMatch(matchToProgress)
       }
-      // If WO, don't record telemetry for the player who passed
-      if (!matchToProgress.opponents.some((o) => o?.id === "")) {
-        this.updateMatchCache(matchToProgress)
+    }
+  }
+
+  /**
+   * Fills the stats in one pass over the matches. A match against a walkover or resolved by a forfeit counts for
+   * nobody. Otherwise each set counts once every opponent has a numeric score in it, even if the match is in progress,
+   * and the match counts once it is complete with at least one counted set.
+   */
+  protected fillStats(stats: Map<OpponentId, Stats>): void {
+    // First incomplete match of each opponent, in the order of this.matches, for matchesRemaining
+    const nextMatches = new Map<OpponentId, Match>()
+
+    for (const match of this.matches) {
+      if (!match.complete) {
+        match.opponents.forEach((o) => {
+          if (o && !nextMatches.has(o.id)) nextMatches.set(o.id, match)
+        })
       }
-      if (winnerId) {
-        this.playersToUpdateTelemetry.add(winnerId)
+      if (this.hasWalkover(match) || this.isResolvedByForfeit(match)) {
+        continue
       }
-      if (loserId) {
-        this.playersToUpdateTelemetry.add(loserId)
+      const opponents = match.opponents.filter((o): o is Opponent => o !== undefined)
+      if (opponents.length !== match.opponents.length) {
+        continue
+      }
+
+      let countedSets = 0
+      match.sets.forEach(({ scores }) => {
+        if (!opponents.every((o) => typeof scores[o.id] === "number")) {
+          return
+        }
+        countedSets++
+        opponents.forEach((o) => {
+          const opponentStats = stats.get(o.id)
+          const other = opponents.find((other) => other.id !== o.id)
+          if (!opponentStats || !other) return
+          let scored = scores[o.id] as number
+          let conceded = scores[other.id] as number
+          if (this.settings.invertedScoring) {
+            ;[scored, conceded] = [conceded, scored]
+          }
+          opponentStats.setsPlayed++
+          if (scored > conceded) opponentStats.setsWon++
+          else if (scored < conceded) opponentStats.setsLost++
+          else opponentStats.setsDraw++
+          opponentStats.scoredPoints += scored
+          opponentStats.concededPoints += conceded
+        })
+      })
+
+      // A duel match can't be a draw (see notScorable()), so matchesDraw stays at 0
+      if (match.complete && countedSets > 0) {
+        const winnerId = this.getWinnerId(match)
+        opponents.forEach((o) => {
+          const opponentStats = stats.get(o.id)
+          if (!opponentStats) return
+          opponentStats.matchesPlayed++
+          if (o.id === winnerId) opponentStats.matchesWon++
+          else opponentStats.matchesLost++
+        })
       }
     }
+
+    stats.forEach((opponentStats, opponentId) => {
+      opponentStats.ratioPoints = computeScoreRatio(opponentStats.scoredPoints, opponentStats.concededPoints)
+
+      const nextMatch = nextMatches.get(opponentId)
+      if (nextMatch === undefined) {
+        return
+      }
+      const { bracket, round } = nextMatch.id
+      if (bracket === PhaseBracket.winner) {
+        opponentStats.matchesRemaining =
+          this.bracketPower -
+          (round - 1) +
+          (this.settings.elimination === "double" ? (this.settings.enableExtendedFinals ? 2 : 1) : 0)
+      } else {
+        // In double elimination, rounds r to 2p - 1 (grand final 1) remain, plus grand final 2 with extended finals.
+        // In single elimination, the only loser bracket match is the bronze final.
+        opponentStats.matchesRemaining =
+          this.settings.elimination === "double"
+            ? 2 * this.bracketPower - round + (this.settings.enableExtendedFinals ? 1 : 0)
+            : 1
+      }
+    })
   }
 
   /**
@@ -468,20 +541,18 @@ export class DuelPhase extends PhaseBase {
    * The walkover loses first, otherwise the first forfeiting opponent loses: when both opponents forfeited, the one in
    * position 2 wins. A forfeit replaces every set with `"FF"` for each forfeiting opponent, while a walkover writes nothing.
    */
-  private progressFFMatch(match: Match): { winnerId: OpponentId; loserId: OpponentId } | void {
+  private progressFFMatch(match: Match): void {
     const loser = match.opponents.find((o) => o?.id === "") || match.opponents.find((o) => o?.forfeit === true)!
     const winner = match.opponents.find((o) => o?.id !== loser.id)
     if (!winner) return
 
-    // Write the forfeit, replacing the scores already recorded, unless the loser is a walkover.
-    // Then remove the contributions of the sets, so that the match doesn't count in the stats.
+    // Write the forfeit, replacing the scores already recorded, unless the loser is a walkover
     if (loser.id !== "") {
       const forfeitScores = Object.fromEntries(
         match.opponents.filter((o): o is Opponent => o?.forfeit === true).map((o) => [o.id, "FF" as const])
       )
       match.sets.forEach((set) => {
         set.scores = { ...forfeitScores }
-        this.updateSetCache(set.id, match)
       })
     }
     // Complete the match and lock its parents
@@ -494,7 +565,7 @@ export class DuelPhase extends PhaseBase {
       match.id.round === 2 * Math.ceil(Math.log2(this.opponents.length)) - 1
     ) {
       this.progressGF1(match, winner.id, loser.id)
-      return { winnerId: winner.id, loserId: loser.id }
+      return
     }
 
     const { right, down } = this.getChildrenMatches(match.id)
@@ -506,7 +577,6 @@ export class DuelPhase extends PhaseBase {
       down.match.opponents[down.index] = loser
       this.matchesToProgress.set(idToString(down.match.id), down.match.id)
     }
-    return { winnerId: winner.id, loserId: loser.id }
   }
 
   /**
@@ -548,17 +618,8 @@ export class DuelPhase extends PhaseBase {
   /**
    * Progress a complete match.
    */
-  private progressCompleteMatch(match: Match): { winnerId: OpponentId; loserId: OpponentId } | void {
-    // Sum the scores for each opponent in the match, according to the matchWinRule)
-    const pointsMap = this.getPointsMap(match)
-    // Then find the winner according to the invertedScoring setting
-    const winnerId = Array.from(pointsMap.entries()).sort(([, scoreA], [, scoreB]) => {
-      if (this.settings.invertedScoring) {
-        return scoreA - scoreB
-      } else {
-        return scoreB - scoreA
-      }
-    })[0]![0]
+  private progressCompleteMatch(match: Match): void {
+    const winnerId = this.getWinnerId(match)
     const loserId = match.opponents.find((opponent) => opponent?.id !== winnerId)?.id
 
     if (!winnerId || !loserId) {
@@ -571,7 +632,7 @@ export class DuelPhase extends PhaseBase {
       match.id.round === 2 * Math.ceil(Math.log2(this.opponents.length)) - 1
     ) {
       this.progressGF1(match, winnerId, loserId)
-      return { winnerId, loserId }
+      return
     }
 
     // Fill children
@@ -585,7 +646,6 @@ export class DuelPhase extends PhaseBase {
         this.matchesToProgress.set(idToString(child.match.id), child.match.id)
       }
     })
-    return { winnerId, loserId }
   }
 
   /**
@@ -624,156 +684,6 @@ export class DuelPhase extends PhaseBase {
     }
   }
 
-  protected updateSetCache(setId: SetId, match: Match): void {
-    const scores = match.sets[setId.set - 1]!.scores
-
-    // if the set is not complete or carries a forfeit, remove it from the cache and return
-    if (
-      match.opponents.some((o) => o === undefined) ||
-      Object.keys(scores).length !== match.opponents.length ||
-      !isNumericScores(scores)
-    ) {
-      if (this.setContribCache[idToString(setId)]) {
-        delete this.setContribCache[idToString(setId)]
-      }
-      return
-    }
-
-    if (!this.setContribCache[idToString(setId)]) {
-      this.setContribCache[idToString(setId)] = new Map()
-    }
-
-    match.opponents.forEach((o) => {
-      if (!o) return
-
-      const inverted = this.settings.invertedScoring
-      let scored = scores[o.id]!
-      let conceded = Object.entries(scores).filter(([id, _s]) => id !== o.id)[0]![1]
-      if (inverted) {
-        const tmp = scored
-        scored = conceded
-        conceded = tmp
-      }
-      const ratioPoints = computeScoreRatio(scored, conceded)
-
-      const setCache = this.setContribCache[idToString(setId)]!
-      // opponent not recorded yet and not ff (new score), or opponent already recorded and was not ff (score update)
-      if ((!setCache.has(o.id) && !o.forfeit) || setCache.get(o.id)?.forfeit === false) {
-        setCache.set(o.id, { forfeit: false, contrib: { scored, conceded, ratioPoints } })
-      }
-      // opponent already recorded and was ff, or opponent not recorded and is ff
-      else {
-        setCache.set(o.id, { forfeit: true, contrib: undefined })
-      }
-    })
-  }
-
-  protected updateMatchCache(match: Match): void {
-    // A match resolved by a forfeit doesn't count in the stats of any of its opponents
-    if (!match.complete || this.isResolvedByForfeit(match)) {
-      if (this.matchContribCache[idToString(match.id)]) {
-        delete this.matchContribCache[idToString(match.id)]
-      }
-      return
-    }
-
-    if (!this.matchContribCache[idToString(match.id)]) {
-      this.matchContribCache[idToString(match.id)] = new Map()
-    }
-
-    const pointsMap = this.getPointsMap(match)
-
-    match.opponents.forEach((o) => {
-      if (!o) return
-      const forfeit =
-        this.matchContribCache[idToString(match.id)]!.get(o.id) !== undefined
-          ? this.matchContribCache[idToString(match.id)]!.get(o.id)!.forfeit
-          : o.forfeit
-      const win =
-        Array.from(pointsMap.entries()).sort(([, scoreA], [, scoreB]) => {
-          if (this.settings.invertedScoring) {
-            return scoreA - scoreB
-          } else {
-            return scoreB - scoreA
-          }
-        })[0]?.[0] === o.id
-      const loss = !win
-
-      this.matchContribCache[idToString(match.id)]!.set(o.id, {
-        forfeit,
-        win,
-        loss,
-        draw: false // draw is not possible in duel phase
-      })
-    })
-  }
-
-  protected updatePlayersTelemetry(): void {
-    while (this.playersToUpdateTelemetry.size) {
-      const nextPlayerId = this.playersToUpdateTelemetry.values().next().value!
-      const playerToUpdate = this.opponents.find((o) => o.id === nextPlayerId)
-      if (!playerToUpdate) {
-        throw new Error(`updatePlayersTelemetry: opponent ${nextPlayerId} not found.`)
-      }
-      this.playersToUpdateTelemetry.delete(nextPlayerId)
-
-      const playerSets = Object.entries(this.setContribCache)
-        .filter(([, contribMap]) => contribMap.has(nextPlayerId))
-        .map(([setId, contribMap]) => {
-          return { setId, ...contribMap.get(nextPlayerId)! }
-        })
-
-      const playerMatches = Object.entries(this.matchContribCache)
-        .filter(([matchId]) =>
-          Object.entries(this.setContribCache).some(
-            ([setId, contribs]) => setId.indexOf(matchId) === 0 && contribs.get(nextPlayerId)?.contrib !== undefined
-          )
-        )
-        .map(([matchId, contribMap]) => {
-          if (contribMap.has(nextPlayerId)) {
-            return { matchId, contrib: contribMap.get(nextPlayerId)! }
-          }
-        })
-
-      const latestMatch = this.matches.find((m) => m.opponents.some((o) => o?.id === nextPlayerId) && !m.complete)
-      let remainingMatches = 0
-      if (latestMatch !== undefined) {
-        const { bracket, round } = latestMatch.id
-        if (bracket === PhaseBracket.winner) {
-          remainingMatches =
-            this.bracketPower -
-            (round - 1) +
-            (this.settings.elimination === "double" ? (this.settings.enableExtendedFinals ? 2 : 1) : 0)
-        } else {
-          remainingMatches =
-            this.settings.elimination === "double"
-              ? 2 * this.bracketPower - (this.settings.enableExtendedFinals ? round : round + 1)
-              : 1 // Two or One GF : Bronze final
-        }
-      }
-
-      playerToUpdate.stats = {
-        matchesPlayed: playerMatches.filter((m) => m && !m.contrib.forfeit).length,
-        matchesRemaining: remainingMatches,
-        matchesWon: playerMatches.filter((m) => m && !m.contrib.forfeit && m.contrib.win).length,
-        matchesLost: playerMatches.filter((m) => m && !m.contrib.forfeit && m.contrib.loss).length,
-        matchesDraw: 0,
-
-        setsPlayed: playerSets.filter((s) => !s.forfeit).length,
-        setsWon: playerSets.filter((s) => !s.forfeit && s.contrib!.scored > s.contrib!.conceded).length,
-        setsLost: playerSets.filter((s) => !s.forfeit && s.contrib!.scored < s.contrib!.conceded).length,
-        setsDraw: playerSets.filter((s) => !s.forfeit && s.contrib!.scored === s.contrib!.conceded).length,
-
-        concededPoints: playerSets.filter((s) => !s.forfeit).reduce((acc, s) => acc + s.contrib!.conceded, 0),
-        scoredPoints: playerSets.filter((s) => !s.forfeit).reduce((acc, s) => acc + s.contrib!.scored, 0),
-        ratioPoints: computeScoreRatio(
-          playerSets.filter((s) => !s.forfeit).reduce((acc, s) => acc + s.contrib!.scored, 0),
-          playerSets.filter((s) => !s.forfeit).reduce((acc, s) => acc + s.contrib!.conceded, 0)
-        )
-      }
-    }
-  }
-
   /**
    * Whether the match was resolved by a forfeit, read from its scores (`"FF"`) and not from `Opponent.forfeit`, which
    * describes the current state of an opponent and can be toggled back.
@@ -799,6 +709,23 @@ export class DuelPhase extends PhaseBase {
     }
     const { right, down } = this.getChildrenMatches(match.id)
     return [right, down].some((child) => child !== null && this.hasStarted(child.match))
+  }
+
+  /**
+   * Returns the winner of a match from its counted sets, according to the matchWinRule and invertedScoring settings, or
+   * undefined if no set counts.
+   */
+  private getWinnerId(match: Match): OpponentId | undefined {
+    // Sum the scores for each opponent in the match, according to the matchWinRule
+    const pointsMap = this.getPointsMap(match)
+    // Then find the winner according to the invertedScoring setting
+    return Array.from(pointsMap.entries()).sort(([, scoreA], [, scoreB]) => {
+      if (this.settings.invertedScoring) {
+        return scoreA - scoreB
+      } else {
+        return scoreB - scoreA
+      }
+    })[0]?.[0]
   }
 
   private getPointsMap(match: Match): Map<OpponentId, number> {

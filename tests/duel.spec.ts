@@ -4,17 +4,18 @@
   MATCH_WIN_RULES,
   MatchId,
   newOpponents,
-  newTelemetry,
+  newStats,
   OpponentId,
   PHASE_TYPES,
   PhaseBracket,
+  Stats,
   TournamentPhase
 } from "../src"
 const W = PhaseBracket.winner
 const L = PhaseBracket.loser
 const F = TournamentPhase.Final
 
-const zeroStats = {
+const initialStats = Object.freeze({
   matchesPlayed: 0,
   matchesRemaining: 0,
   matchesWon: 0,
@@ -26,8 +27,10 @@ const zeroStats = {
   setsDraw: 0,
   scoredPoints: 0,
   concededPoints: 0,
-  ratioPoints: 0
-}
+  ratioPoints: 0.5 // computeScoreRatio(0, 0): no points counted yet
+} satisfies Stats)
+// The match, set and point counters, which stay at 0 until the opponent plays
+const { matchesRemaining: _remaining, ratioPoints: _ratio, ...zeroCounters } = initialStats
 
 function createPlayers(nb: number): OpponentId[] {
   return Array.from({ length: nb }, (_, index) => `${index + 1}`)
@@ -322,8 +325,7 @@ describe("Duel phase structure and graph", () => {
           .at(0)
       ).toStrictEqual({
         id: "",
-        forfeit: true,
-        stats: zeroStats
+        forfeit: true
       })
     })
   })
@@ -766,7 +768,7 @@ describe("Duel phase scoring and progression", () => {
       play(duel, [semiFinals[0]!])
       const first = duel.getResult().filter((r) => r.rank === 1)
       expect(first.map((r) => r.opponentId)).toStrictEqual(["1"])
-      expect(first[0]!.telemetry.matchesWon).toBe(1)
+      expect(first[0]!.stats.matchesWon).toBe(1)
     })
     test("A rejected score leaves the results unchanged", () => {
       const duel = newDuel(4)
@@ -786,13 +788,13 @@ describe("Duel phase scoring and progression", () => {
       const duel = newDuel(4)
       play(duel, [semiFinals[0]!])
       const expected = duel.getResult()
-      const statsBefore = duel.getOpponents(true).find((o) => o.id === "1")
+      const opponentBefore = duel.getOpponents(true).find((o) => o.id === "1")
       const read = duel.getResult()
       const entry = read.find((r) => r.opponentId === "1")!
       entry.rank = 99
-      entry.telemetry.matchesWon = 99
+      entry.stats.matchesWon = 99
       expect(duel.getResult()).toStrictEqual(expected)
-      expect(duel.getOpponents(true).find((o) => o.id === "1")).toStrictEqual(statsBefore)
+      expect(duel.getOpponents(true).find((o) => o.id === "1")).toStrictEqual(opponentBefore)
     })
     test("Results read before a score keep their values", () => {
       const duel = newDuel(4)
@@ -804,15 +806,15 @@ describe("Duel phase scoring and progression", () => {
     })
   })
 
-  describe("Opponent telemetry", () => {
-    test("Opponent telemetry - solo player", () => {
+  describe("Opponent stats", () => {
+    test("Opponent stats - solo player", () => {
       const soloDuel = newDuel(7)
       play(soloDuel, [
         { b: W, r: 1, m: 2, p1: "4", p2: "5", sc1: 2, sc2: 3 },
         { b: W, r: 1, m: 3, p1: "2", p2: "7", sc1: 2, sc2: 7 },
         { b: W, r: 2, m: 1, p1: "1", p2: "5", sc1: 7, sc2: 1 }
       ])
-      expect(soloDuel.getResult().find((r) => r.opponentId === "1")?.telemetry.matchesRemaining).toBe(1)
+      expect(soloDuel.getResult().find((r) => r.opponentId === "1")?.stats.matchesRemaining).toBe(1)
       soloDuel.toggleForfeit("1")
       play(soloDuel, [
         { b: W, r: 1, m: 4, p1: "3", p2: "6", sc1: 3, sc2: 0 },
@@ -820,7 +822,7 @@ describe("Duel phase scoring and progression", () => {
       ])
       expect(soloDuel.getCompletion()).toBe(1)
       const results = soloDuel.getResult()
-      expect(results.find((r) => r.opponentId === "1")?.telemetry).toStrictEqual({
+      expect(results.find((r) => r.opponentId === "1")?.stats).toStrictEqual({
         matchesPlayed: 1,
         matchesRemaining: 0,
         matchesWon: 1,
@@ -833,6 +835,167 @@ describe("Duel phase scoring and progression", () => {
         scoredPoints: 7,
         concededPoints: 1,
         ratioPoints: ((7 - 1) / (7 + 1) + 1) / 2
+      })
+    })
+  })
+
+  describe("Phase stats", () => {
+    const stats = (duel: DuelPhase, id: string) => duel.getResult().find((r) => r.opponentId === id)!.stats
+    const firstMatchStep: Step = { b: W, r: 1, m: 1, p1: "1", p2: "4", sc1: 5, sc2: 2 }
+
+    describe("Stats carried by the results", () => {
+      test("Stats right after init", () => {
+        newDuel(4)
+          .getResult()
+          .forEach((r) => {
+            expect(Object.keys(r.stats).sort()).toStrictEqual(Object.keys(initialStats).sort())
+            expect(r.stats).toMatchObject(zeroCounters)
+            expect(r.stats.ratioPoints).toBe(newStats().ratioPoints)
+          })
+      })
+      test("Opponents have no stats", () => {
+        const duel = newDuel(4)
+        play(duel, [firstMatchStep])
+        duel.getOpponents(true).forEach((o) => expect(o).not.toHaveProperty("stats"))
+        duel
+          .getMatches()
+          .flatMap((m) => m.opponents)
+          .filter((o) => o !== undefined)
+          .forEach((o) => expect(o).not.toHaveProperty("stats"))
+      })
+    })
+
+    describe("Stats consistent with the matches", () => {
+      test("Removed score", () => {
+        const duel = newDuel(4)
+        play(duel, [firstMatchStep])
+        score(duel, W, 1, 1, 1, "4", undefined)
+        expect(stats(duel, "1")).toMatchObject(zeroCounters)
+        expect(stats(duel, "4")).toMatchObject(zeroCounters)
+      })
+      test("Corrected score changing the winner", () => {
+        const duel = newDuel(4)
+        play(duel, [firstMatchStep])
+        score(duel, W, 1, 1, 1, "4", 7)
+        expect(stats(duel, "4")).toMatchObject({ matchesWon: 1, scoredPoints: 7, concededPoints: 5 })
+        expect(stats(duel, "1")).toMatchObject({ matchesLost: 1, matchesWon: 0 })
+      })
+    })
+
+    describe("Set counted once finished", () => {
+      test("Finished set of a match in progress", () => {
+        const duel = newDuel(4, { nbMatchSets: [3] })
+        play(duel, [{ ...firstMatchStep, s: 1 }])
+        expect(stats(duel, "1")).toMatchObject({
+          setsPlayed: 1,
+          setsWon: 1,
+          scoredPoints: 5,
+          concededPoints: 2,
+          matchesPlayed: 0
+        })
+        expect(stats(duel, "4")).toMatchObject({ setsPlayed: 1, setsLost: 1, matchesPlayed: 0 })
+      })
+      test("Partial score", () => {
+        const duel = newDuel(4)
+        score(duel, W, 1, 1, 1, "1", 3)
+        expect(stats(duel, "1")).toMatchObject(zeroCounters)
+        expect(stats(duel, "4")).toMatchObject(zeroCounters)
+      })
+      test("Drawn set", () => {
+        const duel = newDuel(4, { nbMatchSets: [3] })
+        play(duel, [{ ...firstMatchStep, s: 1, sc1: 3, sc2: 3 }])
+        expect(stats(duel, "1")).toMatchObject({ setsPlayed: 1, setsDraw: 1 })
+        expect(stats(duel, "4")).toMatchObject({ setsPlayed: 1, setsDraw: 1 })
+      })
+    })
+
+    describe("Match counted when complete", () => {
+      test("Played match", () => {
+        const duel = newDuel(4)
+        play(duel, [{ ...firstMatchStep, sc1: 3, sc2: 1 }])
+        expect(stats(duel, "1")).toMatchObject({ matchesPlayed: 1, matchesWon: 1 })
+        expect(stats(duel, "4")).toMatchObject({ matchesPlayed: 1, matchesLost: 1 })
+        expect(stats(duel, "2")).toMatchObject(zeroCounters)
+        expect(stats(duel, "3")).toMatchObject(zeroCounters)
+      })
+      test("Inverted scoring", () => {
+        const duel = newDuel(4, { invertedScoring: true })
+        play(duel, [{ ...firstMatchStep, sc1: 2, sc2: 5 }])
+        expect(stats(duel, "1")).toMatchObject({ setsWon: 1, matchesWon: 1 })
+        expect(stats(duel, "4")).toMatchObject({ setsLost: 1, matchesLost: 1 })
+      })
+    })
+
+    describe("Walkover excluded from the stats", () => {
+      test("Opponent passing a walkover", () => {
+        const duel = newDuel(3)
+        expect(duel.getMatch({ phase: F, bracket: W, round: 1, match: 1 })?.opponents.map((o) => o?.id)).toStrictEqual([
+          "1",
+          ""
+        ])
+        expect(stats(duel, "1")).toMatchObject({ matchesPlayed: 0, matchesWon: 0, setsPlayed: 0 })
+      })
+    })
+
+    describe("Points ratio", () => {
+      test("Counted points", () => {
+        const duel = newDuel(4)
+        play(duel, [{ ...firstMatchStep, sc1: 7, sc2: 1 }])
+        expect(stats(duel, "1").ratioPoints).toBe(0.875)
+      })
+    })
+
+    describe("Remaining matches", () => {
+      test("Single elimination right after init", () => {
+        newDuel(4)
+          .getResult()
+          .forEach((r) => expect(r.stats.matchesRemaining).toBe(2))
+      })
+      test("Eliminated opponent", () => {
+        const duel = newDuel(4)
+        play(duel, [firstMatchStep])
+        expect(stats(duel, "4").matchesRemaining).toBe(0)
+        expect(stats(duel, "1").matchesRemaining).toBe(1)
+      })
+
+      const remaining = (duel: DuelPhase) =>
+        Object.fromEntries(duel.getResult().map((r) => [r.opponentId, r.stats.matchesRemaining]))
+      // With 4 opponents: WB R1, then WB R2 for the winners and LB R1 for the losers, then LB R2 and grand final 1
+      const doubleSteps: Step[] = [
+        { b: W, r: 1, m: 1, p1: "1", p2: "4", sc1: 3, sc2: 1 },
+        { b: W, r: 1, m: 2, p1: "2", p2: "3", sc1: 3, sc2: 1 },
+        { b: W, r: 2, m: 1, p1: "1", p2: "2", sc1: 3, sc2: 1 },
+        { b: L, r: 1, m: 1, p1: "4", p2: "3", sc1: 3, sc2: 1 },
+        { b: L, r: 2, m: 1, p1: "2", p2: "4", sc1: 3, sc2: 1 }
+      ]
+      test.each([false, true])("Double elimination along the bracket (extended finals: %s)", (extended) => {
+        const duel = newDuel(4, { elimination: "double", enableExtendedFinals: extended })
+        // Grand final 2 adds one match to every opponent still in the bracket
+        const gf2 = extended ? 1 : 0
+        // Everyone in WB R1: WB R1, WB R2, GF1
+        expect(remaining(duel)).toStrictEqual({ "1": 3 + gf2, "2": 3 + gf2, "3": 3 + gf2, "4": 3 + gf2 })
+        // 1 and 2 in WB R2 (WB R2, GF1), 3 and 4 in LB R1 (LB R1, LB R2, GF1)
+        play(duel, doubleSteps.slice(0, 2))
+        expect(remaining(duel)).toStrictEqual({ "1": 2 + gf2, "2": 2 + gf2, "3": 3 + gf2, "4": 3 + gf2 })
+        // 1 in GF1, 2 in LB R2 (LB R2, GF1)
+        play(duel, doubleSteps.slice(2, 3))
+        expect(remaining(duel)).toStrictEqual({ "1": 1 + gf2, "2": 2 + gf2, "3": 3 + gf2, "4": 3 + gf2 })
+        // 3 eliminated, 4 in LB R2
+        play(duel, doubleSteps.slice(3, 4))
+        expect(remaining(duel)).toStrictEqual({ "1": 1 + gf2, "2": 2 + gf2, "3": 0, "4": 2 + gf2 })
+        // 4 eliminated, 2 in GF1
+        play(duel, doubleSteps.slice(4))
+        expect(remaining(duel)).toStrictEqual({ "1": 1 + gf2, "2": 1 + gf2, "3": 0, "4": 0 })
+      })
+      test("Grand final 2 left to play", () => {
+        const duel = newDuel(4, { elimination: "double", enableExtendedFinals: true })
+        play(duel, [...doubleSteps, { b: L, r: 3, m: 1, p1: "1", p2: "2", sc1: 1, sc2: 3 }])
+        expect(remaining(duel)).toStrictEqual({ "1": 1, "2": 1, "3": 0, "4": 0 })
+      })
+      test("Grand final 2 skipped when the winner bracket finalist wins grand final 1", () => {
+        const duel = newDuel(4, { elimination: "double", enableExtendedFinals: true })
+        play(duel, [...doubleSteps, { b: L, r: 3, m: 1, p1: "1", p2: "2", sc1: 3, sc2: 1 }])
+        expect(remaining(duel)).toStrictEqual({ "1": 0, "2": 0, "3": 0, "4": 0 })
       })
     })
   })
@@ -967,7 +1130,7 @@ describe("Duel forfeit", () => {
   })
 
   describe("Match resolved by a forfeit excluded from the stats", () => {
-    const stats = (duel: DuelPhase, id: string) => duel.getResult().find((r) => r.opponentId === id)?.telemetry
+    const stats = (duel: DuelPhase, id: string) => duel.getResult().find((r) => r.opponentId === id)?.stats
     const noMatchCounted = {
       matchesPlayed: 0,
       matchesWon: 0,
@@ -1146,19 +1309,15 @@ describe("Duel forfeit", () => {
 })
 
 describe("Opponent creation", () => {
-  test("newTelemetry returns 12 counters at zero", () => {
-    expect(newTelemetry()).toStrictEqual(zeroStats)
-    expect(Object.keys(newTelemetry())).toHaveLength(12)
+  test("newStats returns 12 counters at zero, with a neutral points ratio", () => {
+    expect(newStats()).toStrictEqual(initialStats)
+    expect(Object.keys(newStats())).toHaveLength(12)
   })
-  test("newTelemetry returns a new object on each call", () => {
-    expect(newTelemetry()).not.toBe(newTelemetry())
+  test("newStats returns a new object on each call", () => {
+    expect(newStats()).not.toBe(newStats())
   })
   test("newOpponents creates an opponent", () => {
-    expect(newOpponents(["a"])).toStrictEqual([{ id: "a", forfeit: false, stats: zeroStats }])
-  })
-  test("newOpponents gives each opponent its own stats", () => {
-    const [first, second] = newOpponents(["a", "b"])
-    expect(first!.stats).not.toBe(second!.stats)
+    expect(newOpponents(["a"])).toStrictEqual([{ id: "a", forfeit: false }])
   })
 })
 
@@ -1186,24 +1345,24 @@ describe("Phase lifecycle", () => {
   })
 
   describe("Opponents created from ids", () => {
-    const player = (id: string) => ({ id, forfeit: false, stats: zeroStats })
+    const player = (id: string) => ({ id, forfeit: false })
 
-    test("Initial opponents follow the order of the ids, with no forfeit and zeroed stats", () => {
+    test("Initial opponents follow the order of the ids, with only their id and no forfeit", () => {
       const ids = ["3", "1", "4", "2"]
       const duel = new DuelPhase(F)
       duel.init(ids, duelBaseSettings)
       const opponents = duel.getOpponents(true)
       expect(opponents).toStrictEqual(ids.map(player))
-      opponents.forEach((o) => expect(Object.keys(o).sort()).toStrictEqual(["forfeit", "id", "stats"]))
+      opponents.forEach((o) => expect(Object.keys(o).sort()).toStrictEqual(["forfeit", "id"]))
     })
     test("Only the opponents of a played match have their stats updated", () => {
       const duel = newDuel(4)
       play(duel, [{ b: W, r: 1, m: 1, p1: "1", p2: "4", sc1: 3, sc2: 1 }])
-      const opponent = (id: string) => duel.getOpponents(true).find((o) => o.id === id)
-      expect(opponent("1")).toMatchObject({ stats: { matchesWon: 1, scoredPoints: 3 } })
-      expect(opponent("4")).toMatchObject({ stats: { matchesLost: 1, scoredPoints: 1 } })
-      expect(opponent("2")).toStrictEqual(player("2"))
-      expect(opponent("3")).toStrictEqual(player("3"))
+      const stats = (id: string) => duel.getResult().find((r) => r.opponentId === id)?.stats
+      expect(stats("1")).toMatchObject({ matchesWon: 1, scoredPoints: 3 })
+      expect(stats("4")).toMatchObject({ matchesLost: 1, scoredPoints: 1 })
+      expect(stats("2")).toMatchObject(zeroCounters)
+      expect(stats("3")).toMatchObject(zeroCounters)
     })
   })
 
