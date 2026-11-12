@@ -1,4 +1,4 @@
-import type { Entrant, Match, MatchId, MatchSet, NodeId, Opponent, Result, Telemetry } from "./types"
+import type { Match, MatchId, MatchSet, NodeId, Opponent, OpponentId, Result, Telemetry } from "./types"
 
 /**
  * Checks if the provided NodeId matches the filter.
@@ -56,10 +56,10 @@ export function newTelemetry(): Telemetry {
 }
 
 /**
- * Creates the opponents of a phase from its entrants, reading only their id: undeclared fields are not copied.
+ * Creates one opponent per id, in the order of the list, without a forfeit and with zeroed stats.
  */
-export function newOpponents(entrants: Entrant[]): Opponent[] {
-  return entrants.map((entrant) => ({ id: entrant.id, forfeit: false, stats: newTelemetry() }))
+export function newOpponents(opponentIds: OpponentId[]): Opponent[] {
+  return opponentIds.map((id) => ({ id, forfeit: false, stats: newTelemetry() }))
 }
 
 export function computeScoreRatio(scored: number, conceded: number): number {

@@ -1,11 +1,11 @@
 ﻿import {
   DuelPhase,
   DuelSettings,
-  Entrant,
   MATCH_WIN_RULES,
   MatchId,
   newOpponents,
   newTelemetry,
+  OpponentId,
   PHASE_TYPES,
   PhaseBracket,
   TournamentPhase
@@ -29,8 +29,8 @@ const zeroStats = {
   ratioPoints: 0
 }
 
-function createPlayers(nb: number): Entrant[] {
-  return Array.from({ length: nb }, (_, index) => ({ id: `${index + 1}` }))
+function createPlayers(nb: number): OpponentId[] {
+  return Array.from({ length: nb }, (_, index) => `${index + 1}`)
 }
 
 const duelBaseSettings: DuelSettings = {
@@ -99,7 +99,7 @@ describe("Duel phase structure and graph", () => {
         'validateSettings: elimination must be either "single" or "double".'
       ))
     test("Minimum opponents", () =>
-      expect(() => newDuel(1)).toThrow("validateEntrants: at least 2 entrants are required."))
+      expect(() => newDuel(1)).toThrow("validateOpponentIds: at least 2 opponents are required."))
     test("Double elimination minimum opponents", () =>
       expect(() => newDuel(2, { elimination: "double" })).toThrow(
         "validateSettings: double elimination requires at least 4 opponents."
@@ -110,11 +110,8 @@ describe("Duel phase structure and graph", () => {
       ))
 
     test("Duplicate player IDs", () => {
-      const players = createPlayers(2).map((p) => ({ ...p, id: "a" }))
       const duel = new DuelPhase(F)
-      expect(() => duel.init(players, duelBaseSettings)).toThrow(
-        "validateEntrants: unicity in entrants id is not respected."
-      )
+      expect(() => duel.init(["a", "a"], duelBaseSettings)).toThrow("validateOpponentIds: opponent ids must be unique.")
     })
     test("Correct simple elimination Duel", () => {
       expect(() => newDuel(2)).not.toThrow()
@@ -123,16 +120,14 @@ describe("Duel phase structure and graph", () => {
       expect(() => newDuel(4, { ...duelBaseSettings, elimination: "double" })).not.toThrow()
     })
 
-    const initWith = (entrants: Entrant[]) => () => new DuelPhase(F).init(entrants, duelBaseSettings)
-    const emptyIdError = "validateEntrants: entrant ids must not be empty."
+    const initWith = (opponentIds: OpponentId[]) => () => new DuelPhase(F).init(opponentIds, duelBaseSettings)
+    const emptyIdError = "validateOpponentIds: opponent ids must not be empty."
 
     test("Empty ids", () => {
-      const [player1, player2] = createPlayers(2)
-      expect(initWith([{ ...player1!, id: "" }, player2!])).toThrow(emptyIdError)
+      expect(initWith(["", "2"])).toThrow(emptyIdError)
     })
     test("Several empty ids report the empty id, not the unicity", () => {
-      const players = createPlayers(2).map((p) => ({ ...p, id: "" }))
-      expect(initWith(players)).toThrow(emptyIdError)
+      expect(initWith(["", ""])).toThrow(emptyIdError)
     })
     test("Generated walkovers keep their empty id", () => {
       const firstRound = newDuel(3).getMatches({ bracket: W, round: 1 })
@@ -1159,16 +1154,10 @@ describe("Opponent creation", () => {
     expect(newTelemetry()).not.toBe(newTelemetry())
   })
   test("newOpponents creates an opponent", () => {
-    expect(newOpponents([{ id: "a" }])).toStrictEqual([{ id: "a", forfeit: false, stats: zeroStats }])
-  })
-  test("newOpponents drops undeclared fields", () => {
-    const entrants = [
-      { id: "a", name: "Alice", forfeit: true, stats: { ...zeroStats, matchesWon: 9 } }
-    ] as unknown as Entrant[]
-    expect(newOpponents(entrants)).toStrictEqual([{ id: "a", forfeit: false, stats: zeroStats }])
+    expect(newOpponents(["a"])).toStrictEqual([{ id: "a", forfeit: false, stats: zeroStats }])
   })
   test("newOpponents gives each opponent its own stats", () => {
-    const [first, second] = newOpponents([{ id: "a" }, { id: "b" }])
+    const [first, second] = newOpponents(["a", "b"])
     expect(first!.stats).not.toBe(second!.stats)
   })
 })
@@ -1196,14 +1185,15 @@ describe("Phase lifecycle", () => {
     })
   })
 
-  describe("Opponents created from entrants", () => {
+  describe("Opponents created from ids", () => {
     const player = (id: string) => ({ id, forfeit: false, stats: zeroStats })
 
-    test("Initial opponents have only their id, no forfeit and zeroed stats", () => {
+    test("Initial opponents follow the order of the ids, with no forfeit and zeroed stats", () => {
+      const ids = ["3", "1", "4", "2"]
       const duel = new DuelPhase(F)
-      duel.init(createPlayers(4), duelBaseSettings)
+      duel.init(ids, duelBaseSettings)
       const opponents = duel.getOpponents(true)
-      expect(opponents).toStrictEqual(["1", "2", "3", "4"].map(player))
+      expect(opponents).toStrictEqual(ids.map(player))
       opponents.forEach((o) => expect(Object.keys(o).sort()).toStrictEqual(["forfeit", "id", "stats"]))
     })
     test("Only the opponents of a played match have their stats updated", () => {
@@ -1217,45 +1207,28 @@ describe("Phase lifecycle", () => {
     })
   })
 
-  describe("Undeclared fields", () => {
-    const nonZeroStats = { ...zeroStats, matchesWon: 9, scoredPoints: 9 }
-    const initWith = (entrants: unknown[], settings: DuelSettings = duelBaseSettings) => {
+  describe("Non-string ids", () => {
+    const nonStringError = "validateOpponentIds: opponent ids must be strings."
+    const expectRejected = (opponentIds: unknown[]) => {
       const duel = new DuelPhase(F)
-      duel.init(entrants as Entrant[], settings)
-      return duel
-    }
-    const withFirst = (fields: object) => {
-      const [first, ...others] = createPlayers(4)
-      return [{ ...first!, ...fields }, ...others]
+      expect(() => duel.init(opponentIds as OpponentId[], duelBaseSettings)).toThrow(nonStringError)
+      expect(duel.getMatches()).toEqual([])
+      expect(duel.getOpponents(true)).toEqual([])
+      expect(duel.settings).toBeUndefined()
     }
 
-    test("A forfeit provided as input is ignored", () => {
-      const duel = initWith(withFirst({ forfeit: true }))
-      expect(duel.getOpponents(true).find((o) => o.id === "1")?.forfeit).toBe(false)
-      expect(duel.getMatches({ bracket: W, round: 1 }).some((m) => m.complete)).toBe(false)
-      expect(duel.getCompletion()).toBe(0)
+    test("Objects passed instead of ids are rejected", () => {
+      expectRejected([{ id: "a" }, { id: "b" }])
     })
-    test("Stats provided as input are ignored", () => {
-      const duel = initWith(withFirst({ stats: nonZeroStats }))
-      expect(duel.getOpponents(true).find((o) => o.id === "1")).toMatchObject({ stats: zeroStats })
+    test.each<[string, unknown]>([
+      ["a number", 1],
+      ["null", null],
+      ["undefined", undefined]
+    ])("An id that is %s is rejected", (_name, value) => {
+      expectRejected(["1", value])
     })
-    test("A free field provided as input is ignored", () => {
-      const duel = initWith(withFirst({ name: "Alice" }))
-      expect(duel.getOpponents(true).find((o) => o.id === "1")).not.toHaveProperty("name")
-    })
-    test("A team provided by a JavaScript caller is a simple opponent", () => {
-      const teams = ["a", "b", "c", "d"].map((id) => ({ type: "team", id, players: [{ id: `${id}-1` }] }))
-      const duel = new DuelPhase(F)
-      expect(() => duel.init(teams as unknown as Entrant[], duelBaseSettings)).not.toThrow()
-      expect(duel.getOpponents(true)).toStrictEqual(
-        ["a", "b", "c", "d"].map((id) => ({ id, forfeit: false, stats: zeroStats }))
-      )
-      expect(
-        duel
-          .getResult()
-          .map((r) => r.opponentId)
-          .sort()
-      ).toStrictEqual(["a", "b", "c", "d"])
+    test("The type is checked before the empty id", () => {
+      expectRejected(["", 1])
     })
   })
 
@@ -1278,7 +1251,7 @@ describe("Phase lifecycle", () => {
       duel.init(players, duelBaseSettings)
       const before = duel.getOpponents(true)
 
-      players[0] = { id: "replaced" }
+      players[0] = "replaced"
       players.pop()
 
       expect(duel.getOpponents(true)).toEqual(before)
@@ -1298,14 +1271,14 @@ describe("Phase lifecycle", () => {
   })
 
   describe("Validation", () => {
-    test.each<[string, Entrant[], DuelSettings, string]>([
-      ["too few opponents", createPlayers(1), duelBaseSettings, "validateEntrants: at least 2 entrants are required."],
+    test.each<[string, OpponentId[], DuelSettings, string]>([
       [
-        "duplicate ids",
-        createPlayers(2).map((p) => ({ ...p, id: "a" })),
+        "too few opponents",
+        createPlayers(1),
         duelBaseSettings,
-        "validateEntrants: unicity in entrants id is not respected."
+        "validateOpponentIds: at least 2 opponents are required."
       ],
+      ["duplicate ids", ["a", "a"], duelBaseSettings, "validateOpponentIds: opponent ids must be unique."],
       [
         "invalid common settings",
         createPlayers(2),
@@ -1318,21 +1291,16 @@ describe("Phase lifecycle", () => {
         { ...duelBaseSettings, elimination: "double" },
         "validateSettings: double elimination requires at least 4 opponents."
       ],
-      [
-        "empty id",
-        createPlayers(2).map((p) => ({ ...p, id: "" })),
-        duelBaseSettings,
-        "validateEntrants: entrant ids must not be empty."
-      ],
+      ["empty id", ["", ""], duelBaseSettings, "validateOpponentIds: opponent ids must not be empty."],
       [
         "infinite nbMatchSets",
         createPlayers(2),
         { ...duelBaseSettings, nbMatchSets: [Infinity] },
         "validateSettings: all nbMatchSets must be integers."
       ]
-    ])("Rejected init leaves the phase empty: %s", (_name, entrants, settings, message) => {
+    ])("Rejected init leaves the phase empty: %s", (_name, opponentIds, settings, message) => {
       const duel = new DuelPhase(F)
-      expect(() => duel.init(entrants, settings)).toThrow(message)
+      expect(() => duel.init(opponentIds, settings)).toThrow(message)
       expect(duel.getMatches()).toEqual([])
       expect(duel.getOpponents(true)).toEqual([])
       expect(duel.settings).toBeUndefined()
