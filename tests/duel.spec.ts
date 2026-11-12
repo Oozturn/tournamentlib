@@ -27,7 +27,7 @@ const initialStats = Object.freeze({
   setsDraw: 0,
   scoredPoints: 0,
   concededPoints: 0,
-  ratioPoints: 0.5 // computeScoreRatio(0, 0): no points counted yet
+  ratioPoints: 0 // computeScoreRatio(0, 0): no points counted yet
 } satisfies Stats)
 // The match, set and point counters, which stay at 0 until the opponent plays
 const { matchesRemaining: _remaining, ratioPoints: _ratio, ...zeroCounters } = initialStats
@@ -834,7 +834,7 @@ describe("Duel phase scoring and progression", () => {
         setsDraw: 0,
         scoredPoints: 7,
         concededPoints: 1,
-        ratioPoints: ((7 - 1) / (7 + 1) + 1) / 2
+        ratioPoints: (7 - 1) / (7 + 1) / 2
       })
     })
   })
@@ -941,7 +941,23 @@ describe("Duel phase scoring and progression", () => {
       test("Counted points", () => {
         const duel = newDuel(4)
         play(duel, [{ ...firstMatchStep, sc1: 7, sc2: 1 }])
-        expect(stats(duel, "1").ratioPoints).toBe(0.875)
+        expect(stats(duel, "1").ratioPoints).toBe(0.375)
+      })
+      test("More points conceded than scored", () => {
+        const duel = newDuel(4)
+        play(duel, [{ ...firstMatchStep, sc1: 7, sc2: 1 }])
+        expect(stats(duel, "4").ratioPoints).toBe(-0.375)
+      })
+      test("Equal points", () => {
+        const duel = newDuel(4, { nbMatchSets: [3] })
+        play(duel, [{ ...firstMatchStep, s: 1, sc1: 3, sc2: 3 }])
+        expect(stats(duel, "1").ratioPoints).toBe(0)
+        expect(stats(duel, "4").ratioPoints).toBe(0)
+      })
+      test("No counted points", () => {
+        newDuel(4)
+          .getResult()
+          .forEach((r) => expect(r.stats.ratioPoints).toBe(0))
       })
     })
 
