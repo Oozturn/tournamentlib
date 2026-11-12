@@ -51,7 +51,7 @@ export function newStats(): Stats {
     setsDraw: 0,
     scoredPoints: 0,
     concededPoints: 0,
-    ratioPoints: 0.5 // computeScoreRatio(0, 0): no points counted yet
+    ratioPoints: 0 // computeScoreRatio(0, 0): no points counted yet
   }
 }
 
@@ -63,7 +63,7 @@ export function newOpponents(opponentIds: OpponentId[]): Opponent[] {
 }
 
 export function computeScoreRatio(scored: number, conceded: number): number {
-  return scored + conceded === 0 ? 0.5 : ((scored - conceded) / (scored + conceded) + 1) / 2 // between 0 and 1, 0.5 if draw
+  return scored + conceded === 0 ? 0 : (scored - conceded) / (scored + conceded) / 2 // between -0.5 and 0.5, 0 if draw
 }
 
 export function deepCopyOpponents(opponents: (Opponent | undefined)[]): (Opponent | undefined)[] {
