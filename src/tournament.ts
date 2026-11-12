@@ -1,6 +1,6 @@
 ﻿import { newOpponents } from "./tools"
 import { TournamentPhase } from "./types"
-import type { Entrants, Opponent, OpponentId, TournamentSettings, Match, MatchId, SetId, Result } from "./types"
+import type { Opponent, OpponentId, TournamentSettings, Match, MatchId, SetId, Result } from "./types"
 import type { Phase } from "./phase"
 
 export interface TournamentInterface {
@@ -39,16 +39,14 @@ export interface TournamentInterface {
 export class Tournament implements TournamentInterface {
   readonly settings: TournamentSettings
   private opponents: Opponent[]
-  private useTeams: boolean
   private phases: Record<TournamentPhase, Phase>
   private currentPhase: TournamentPhase | undefined
   private completion: number = 0
   private resultsCache: Result[] = []
 
-  constructor(entrants: Entrants, settings: TournamentSettings) {
-    this.useTeams = entrants[0]?.type === "team"
-    this.validateEntrants(entrants)
-    this.opponents = newOpponents(entrants)
+  constructor(opponentIds: OpponentId[], settings: TournamentSettings) {
+    this.validateOpponentIds(opponentIds)
+    this.opponents = newOpponents(opponentIds)
     this.validateSettings(settings)
     this.settings = settings
     this.phases = {} as Record<TournamentPhase, Phase>
@@ -103,18 +101,12 @@ export class Tournament implements TournamentInterface {
     this.updateCompletion()
   }
 
-  private validateEntrants(entrants: Entrants): void {
-    if (entrants.length < 2) {
-      throw new Error(`validateEntrants: at least 2 entrants are required.`)
+  private validateOpponentIds(opponentIds: OpponentId[]): void {
+    if (opponentIds.length < 2) {
+      throw new Error(`validateOpponentIds: at least 2 opponents are required.`)
     }
-    if (Array.from(new Set(entrants.map((e) => e.id))).length != entrants.length) {
-      throw new Error(`validateEntrants: unicity in entrants id is not respected.`)
-    }
-    if (this.useTeams) {
-      const ids = entrants.filter((e) => e.type === "team").flatMap((e) => [e.id, ...e.players.map((p) => p.id)])
-      if (Array.from(new Set(ids)).length != ids.length) {
-        throw new Error(`validateEntrants: unicity in entrants id is not respected.`)
-      }
+    if (new Set(opponentIds).size != opponentIds.length) {
+      throw new Error(`validateOpponentIds: opponent ids must be unique.`)
     }
   }
 

@@ -1,48 +1,17 @@
 ﻿/////////////////////////////////////////////
-// Entrant
+// Opponent
 /////////////////////////////////////////////
 
 export type OpponentId = string
 
 /**
- * What the caller provides to enter a phase. The phase creates its opponents from these declared fields only.
+ * A participant of a phase, created from one of the ids passed to `init()`. The phase updates it as it progresses.
  */
-export interface PlayerEntrant {
-  readonly type: "player"
-  readonly id: OpponentId
-}
-export interface TeamEntrant {
-  readonly type: "team"
-  readonly id: OpponentId
-  players: PlayerEntrant[]
-}
-export type Entrant = PlayerEntrant | TeamEntrant
-/**
- * The entrants of a phase, either all players or all teams: a list that mixes them doesn't compile.
- */
-export type Entrants = PlayerEntrant[] | TeamEntrant[]
-
-/////////////////////////////////////////////
-// Opponent
-/////////////////////////////////////////////
-
-/**
- * The state of an entrant within a phase, which the phase updates as it progresses.
- */
-export interface PlayerOpponent {
-  readonly type: "player"
+export interface Opponent {
   readonly id: OpponentId
   forfeit: boolean
   stats: Telemetry
 }
-export interface TeamOpponent {
-  readonly type: "team"
-  readonly id: OpponentId
-  forfeit: boolean
-  players: PlayerOpponent[]
-}
-export type Opponent = PlayerOpponent | TeamOpponent
-export type OpponentType = Opponent["type"]
 
 /////////////////////////////////////////////
 // Id
@@ -147,7 +116,7 @@ export enum PhaseBracket {
 /////////////////////////////////////////////
 
 /**
- * Stores the contribution of each player (no team) in a set, to be used for telemetry and progression.
+ * Stores the contribution of each opponent in a set, to be used for telemetry and progression.
  */
 export type SetContribCache = Record<
   setIdString,
@@ -167,7 +136,7 @@ export type SetContribCache = Record<
 >
 
 /**
- * Stores the contribution of each opponent (player or team) in a match, to be used for telemetry and progression.
+ * Stores the contribution of each opponent in a match, to be used for telemetry and progression.
  */
 export type MatchContribCache = Record<
   matchIdString,

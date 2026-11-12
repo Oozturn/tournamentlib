@@ -1,15 +1,6 @@
-import {
-  compatibleIds,
-  deepCopyMatch,
-  deepCopyOpponents,
-  idToString,
-  isTeamOpponent,
-  newOpponents,
-  sameResults
-} from "./tools"
+import { compatibleIds, deepCopyMatch, deepCopyOpponents, idToString, newOpponents, sameResults } from "./tools"
 import { MATCH_WIN_RULES, PHASE_TYPES } from "./types"
 import type {
-  Entrants,
   Opponent,
   OpponentId,
   PhaseSettings,
@@ -20,10 +11,8 @@ import type {
   MatchId,
   TournamentPhase,
   matchIdString,
-  TeamOpponent,
   SetContribCache,
-  MatchContribCache,
-  PlayerOpponent
+  MatchContribCache
 } from "./types"
 
 export interface Phase {
@@ -31,18 +20,18 @@ export interface Phase {
   readonly settings: PhaseSettings
 
   /**
-   * Initializes the phase with its entrants and settings: validates them, creates an opponent from each entrant's
-   * declared fields (without forfeit and with zeroed stats, undeclared fields being ignored), copies the settings,
-   * generates the matches and progresses the walkovers. To declare a forfeit before the phase starts, call
-   * `toggleForfeit` after `init`. It can only succeed once: any later call throws, while a call rejected by validation
+   * Initializes the phase with the ids of its opponents and its settings: validates them, creates an opponent for each
+   * id in the order of the list, which sets the seeding (without forfeit and with zeroed stats), copies the settings,
+   * generates the matches and progresses the walkovers. Each id must be a non-empty string, unique in the list. To
+   * declare a forfeit before the phase starts, call `toggleForfeit` after `init`. It can only succeed once: any later call throws, while a call rejected by validation
    * leaves the phase empty and can be retried.
    * Until then, `settings` is `undefined` despite its type, reads return empty values, and `score` and `toggleForfeit` throw.
    */
-  init(entrants: Entrants, settings: PhaseSettings): void
+  init(opponentIds: OpponentId[], settings: PhaseSettings): void
 
   /**
-   * Returns the current ranking of the phase, one entry per player, sorted by rank, computed on each call from the
-   * players' forfeit and telemetry. Returns an empty list before `init`.
+   * Returns the current ranking of the phase, one entry per opponent, sorted by rank, computed on each call from the
+   * opponents' forfeit and telemetry. Returns an empty list before `init`.
    */
   getResult(): Result[]
   /**
@@ -54,11 +43,10 @@ export interface Phase {
   /**
    * Returns the opponents of the phase.
    * @param includeForfeited Whether to include opponents who have forfeited
-   * @param individualOpponents Whether to return players (true) instead of the phase's opponents, which may be teams (false)
    */
-  getOpponents(includeForfeited: boolean, individualOpponents: boolean): Opponent[]
+  getOpponents(includeForfeited: boolean): Opponent[]
   /**
-   * Toggles the forfeit status of an opponent (or a player within a team), then re-progresses the phase so that
+   * Toggles the forfeit status of an opponent, then re-progresses the phase so that
    * matches, telemetry and results reflect the new forfeit state.
    * A match resolved by a forfeit carries the score `"FF"` for each opponent who forfeited, and no score for the other
    * opponents. This is the only way to write `"FF"`. How a forfeit resolves a match depends on the phase type.
@@ -86,8 +74,6 @@ export abstract class PhaseBase implements Phase {
   private initialized: boolean = false
   protected matches: Match[] = []
   protected opponents: Opponent[] = []
-  protected players: PlayerOpponent[] = []
-  protected teamOfPlayers: Map<OpponentId, TeamOpponent> = new Map()
 
   // Avoid to search for matches to progress by caching the edited ones
   protected matchesToProgress: Map<matchIdString, MatchId> = new Map()
@@ -121,7 +107,7 @@ export abstract class PhaseBase implements Phase {
 
   /**
    * This method is called from score() when a set is complete.
-   * It saves the contribution of each player (not team) in the set to the setContribCache, so that it can be
+   * It saves the contribution of each opponent in the set to the setContribCache, so that it can be
    * used later to update telemetry or progress the tournament without parsing all the matches again.
    * @param setId The ID of the set to save
    * @param match The match containing the set to save
@@ -130,7 +116,7 @@ export abstract class PhaseBase implements Phase {
 
   /**
    * This method is called from progress() when a match is complete.
-   * It saves the contribution of each opponent (player or team) in the match to the matchContribCache, so that it can be
+   * It saves the contribution of each opponent in the match to the matchContribCache, so that it can be
    * used later to update telemetry or progress the tournament without parsing all the matches again.
    * @param match The match to save
    */
@@ -142,22 +128,14 @@ export abstract class PhaseBase implements Phase {
    */
   protected abstract updatePlayersTelemetry(): void
 
-  public init(entrants: Entrants, settings: PhaseSettings): void {
+  public init(opponentIds: OpponentId[], settings: PhaseSettings): void {
     if (this.initialized) {
       throw new Error(`init: phase is already initialized.`)
     }
-    this.validateEntrants(entrants)
-    this.validateSettings(settings, entrants)
+    this.validateOpponentIds(opponentIds)
+    this.validateSettings(settings, opponentIds)
     this.initialized = true
-    this.opponents = newOpponents(entrants)
-    this.opponents.forEach((opponent) => {
-      if (isTeamOpponent(opponent)) {
-        this.players.push(...opponent.players)
-        opponent.players.forEach((p) => this.teamOfPlayers.set(p.id, opponent))
-      } else {
-        this.players.push(opponent)
-      }
-    })
+    this.opponents = newOpponents(opponentIds)
     this.settings = {
       ...settings,
       nbMatchSets: [...settings.nbMatchSets],
@@ -167,12 +145,12 @@ export abstract class PhaseBase implements Phase {
   }
 
   public getResult(): Result[] {
-    const results: Result[] = this.players
-      .map((player) => ({
-        opponentId: player.id,
+    const results: Result[] = this.opponents
+      .map((opponent) => ({
+        opponentId: opponent.id,
         rank: 0,
-        forfeit: player.forfeit,
-        telemetry: { ...player.stats }
+        forfeit: opponent.forfeit,
+        telemetry: { ...opponent.stats }
       }))
       .sort(
         // TODO: Validate the sorting criteria
@@ -201,45 +179,22 @@ export abstract class PhaseBase implements Phase {
     return this.matches.filter((match) => match.complete).length / this.matches.length
   }
 
-  public getOpponents(includeForfeited: boolean, individualOpponents: boolean): Opponent[] {
-    if (individualOpponents) {
-      return deepCopyOpponents(this.players.filter((p) => includeForfeited || !p.forfeit)).filter(
-        (o) => o !== undefined
-      )
-    }
+  public getOpponents(includeForfeited: boolean): Opponent[] {
     return deepCopyOpponents(this.opponents.filter((o) => includeForfeited || !o.forfeit)).filter(
       (o) => o !== undefined
     )
   }
 
   public toggleForfeit(opponentId: OpponentId): void {
-    const opponent = this.opponents.find((o) => o.id === opponentId) || this.players.find((p) => p.id === opponentId)
+    const opponent = this.opponents.find((o) => o.id === opponentId)
     if (!opponent) {
       throw new Error(`toggleForfeit: opponent ${opponentId} not found.`)
     }
-    // Opponent is a team
-    if (isTeamOpponent(opponent)) {
-      opponent.forfeit = !opponent.forfeit
-      opponent.players.forEach((p) => (p.forfeit = opponent.forfeit))
-    }
-    // Opponent is a player
-    else {
-      opponent.forfeit = !opponent.forfeit
-    }
+    opponent.forfeit = !opponent.forfeit
 
     const matchToProgress = this.matches.find((m) => !m.complete && m.opponents.some((o) => o?.id === opponentId))
     if (matchToProgress) {
       this.matchesToProgress.set(idToString(matchToProgress.id), matchToProgress.id)
-    }
-
-    // Opponent is a player in a team, check if the team is impacted by the forfeit
-    const team = this.teamOfPlayers.get(opponentId)
-    if (team) {
-      team.forfeit = team.players.every((p) => p.forfeit)
-      const matchToProgress = this.matches.find((m) => !m.complete && m.opponents.some((o) => o?.id === team.id))
-      if (matchToProgress) {
-        this.matchesToProgress.set(idToString(matchToProgress.id), matchToProgress.id)
-      }
     }
     this.progress()
     this.updatePlayersTelemetry()
@@ -284,27 +239,24 @@ export abstract class PhaseBase implements Phase {
     this.updatePlayersTelemetry()
   }
 
-  protected validateEntrants(entrants: Entrants): void {
-    if (entrants.length < 2) {
-      throw new Error(`validateEntrants: at least 2 entrants are required.`)
+  protected validateOpponentIds(opponentIds: OpponentId[]): void {
+    if (opponentIds.length < 2) {
+      throw new Error(`validateOpponentIds: at least 2 opponents are required.`)
     }
-    const teams = entrants.filter((e) => e.type === "team")
-    if (teams.length !== 0 && teams.length !== entrants.length) {
-      throw new Error(`validateEntrants: entrants must be either all players or all teams.`)
+    // Checked before the empty and unique ids, which only make sense on strings: a JavaScript caller passing objects
+    // would otherwise get them as opponent ids.
+    if (opponentIds.some((id) => typeof id !== "string")) {
+      throw new Error(`validateOpponentIds: opponent ids must be strings.`)
     }
-    if (teams.some((t) => t.players.length === 0)) {
-      throw new Error(`validateEntrants: every team must have at least one player.`)
+    if (opponentIds.includes("")) {
+      throw new Error(`validateOpponentIds: opponent ids must not be empty.`)
     }
-    const ids = [...entrants.map((e) => e.id), ...teams.flatMap((t) => t.players.map((p) => p.id))]
-    if (ids.includes("")) {
-      throw new Error(`validateEntrants: entrant ids must not be empty.`)
-    }
-    if (new Set(ids).size !== ids.length) {
-      throw new Error(`validateEntrants: unicity in entrants id is not respected.`)
+    if (new Set(opponentIds).size !== opponentIds.length) {
+      throw new Error(`validateOpponentIds: opponent ids must be unique.`)
     }
   }
 
-  protected validateSettings(settings: PhaseSettings, _entrants: Entrants): void {
+  protected validateSettings(settings: PhaseSettings, _opponentIds: OpponentId[]): void {
     if (!PHASE_TYPES.includes(settings.type)) {
       throw new Error(`validateSettings: type must be one of ${PHASE_TYPES.join(", ")}.`)
     }
