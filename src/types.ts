@@ -10,7 +10,6 @@ export type OpponentId = string
 export interface Opponent {
   readonly id: OpponentId
   forfeit: boolean
-  stats: Telemetry
 }
 
 /////////////////////////////////////////////
@@ -47,7 +46,6 @@ export interface SetId extends MatchId {
 
 export type matchIdString = string // Code readability
 export type roundIdString = string // Code readability
-export type setIdString = string // Code readability
 /**
  * A set of a match and the score of each opponent who has one.
  * A score is either a number or `"FF"`. Only a declared forfeit writes `"FF"`, for the opponent who forfeited: `score()`
@@ -115,73 +113,7 @@ export enum PhaseBracket {
 // Results
 /////////////////////////////////////////////
 
-/**
- * Stores the contribution of each opponent in a set, to be used for telemetry and progression.
- */
-export type SetContribCache = Record<
-  setIdString,
-  Map<
-    OpponentId,
-    {
-      forfeit: boolean
-      contrib:
-        | {
-            scored: number
-            conceded: number
-            ratioPoints: number
-          }
-        | undefined
-    }
-  >
->
-
-/**
- * Stores the contribution of each opponent in a match, to be used for telemetry and progression.
- */
-export type MatchContribCache = Record<
-  matchIdString,
-  Map<
-    OpponentId,
-    {
-      forfeit: boolean
-      win: boolean
-      loss: boolean
-      draw: boolean
-    }
-  >
->
-
-export type PhaseTelemetry = {
-  Metadata: {
-    id: TournamentPhase
-    type: PhaseType
-    complete: boolean
-    startedAt: Date | undefined
-    completedAt: Date | undefined
-  }
-  Volume: {
-    matchesTotal: number
-    matchesCompleted: number
-    setsTotal: number
-    setsCompleted: number
-  }
-  opponents: Record<
-    OpponentId,
-    {
-      setsWon: number
-      setsLost: number
-      setsDraw: number
-      pointsFor: number
-      pointsAgainst: number
-      matchesWon: number
-      matchesLost: number
-      matchesDraw: number
-    }
-  >
-  updatedAt: Date
-}
-
-export type Telemetry = {
+export type Stats = {
   matchesPlayed: number
   matchesRemaining: number
   matchesWon: number
@@ -200,5 +132,5 @@ export interface Result {
   opponentId: OpponentId
   rank: number
   forfeit: boolean
-  telemetry: Telemetry
+  stats: Stats
 }

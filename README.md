@@ -22,7 +22,7 @@ It is designed to help you:
   - Single and double elimination modes
   - Extended finals support
   - Forfeit and walkover handling
-  - Match, set, and opponent telemetry
+  - Match, set, and point stats for each opponent
 - Strict TypeScript-first API
 
 ## Project Status
