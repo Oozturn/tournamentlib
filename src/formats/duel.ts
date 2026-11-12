@@ -8,7 +8,6 @@ import {
   OpponentId,
   PhaseBracket,
   SetId,
-  type Entrant,
   type Opponent,
   type PhaseSettings,
   type TournamentPhase
@@ -39,8 +38,8 @@ export class DuelPhase extends PhaseBase {
     this.childrenMatches = new Map()
   }
 
-  public init(entrants: Entrant[], settings: DuelSettings): void {
-    super.init(entrants, settings)
+  public init(opponentIds: OpponentId[], settings: DuelSettings): void {
+    super.init(opponentIds, settings)
     this.settings = {
       ...this.settings,
       nbLBMatchSets: settings.nbLBMatchSets ? [...settings.nbLBMatchSets] : undefined
@@ -54,15 +53,15 @@ export class DuelPhase extends PhaseBase {
     this.progress()
   }
 
-  protected validateSettings(settings: DuelSettings, entrants: Entrant[]): void {
-    super.validateSettings(settings, entrants)
+  protected validateSettings(settings: DuelSettings, opponentIds: OpponentId[]): void {
+    super.validateSettings(settings, opponentIds)
     if (settings.elimination !== "single" && settings.elimination !== "double") {
       throw new Error(`validateSettings: elimination must be either "single" or "double".`)
     }
-    if (entrants.length < 4 && settings.elimination === "double") {
+    if (opponentIds.length < 4 && settings.elimination === "double") {
       throw new Error(`validateSettings: double elimination requires at least 4 opponents.`)
     }
-    if (entrants.length < 4 && settings.enableExtendedFinals) {
+    if (opponentIds.length < 4 && settings.enableExtendedFinals) {
       throw new Error(`validateSettings: enableExtendedFinals requires at least 4 opponents.`)
     }
   }

@@ -1,22 +1,11 @@
 ﻿/////////////////////////////////////////////
-// Entrant
+// Opponent
 /////////////////////////////////////////////
 
 export type OpponentId = string
 
 /**
- * What the caller provides to enter a phase. The phase creates its opponents from these declared fields only.
- */
-export interface Entrant {
-  readonly id: OpponentId
-}
-
-/////////////////////////////////////////////
-// Opponent
-/////////////////////////////////////////////
-
-/**
- * The state of an entrant within a phase, which the phase updates as it progresses.
+ * A participant of a phase, created from one of the ids passed to `init()`. The phase updates it as it progresses.
  */
 export interface Opponent {
   readonly id: OpponentId
