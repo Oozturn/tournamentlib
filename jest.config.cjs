@@ -3,6 +3,7 @@ module.exports = {
   preset: "ts-jest/presets/default-esm",
   testEnvironment: "node",
   testMatch: ["**/tests/**/*.spec.ts"],
+  testPathIgnorePatterns: ["/node_modules/", "<rootDir>/.stryker-tmp/"],
   collectCoverageFrom: ["src/**/*.ts"],
   coverageReporters: ["text-summary", "lcov"],
   extensionsToTreatAsEsm: [".ts"],
