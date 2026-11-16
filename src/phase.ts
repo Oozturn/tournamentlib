@@ -1,4 +1,12 @@
-import { compatibleIds, deepCopyMatch, deepCopyOpponents, idToString, newOpponents, sameResults } from "./tools"
+import {
+  compatibleIds,
+  deepCopyMatch,
+  deepCopyOpponents,
+  idToString,
+  newOpponents,
+  newStats,
+  sameResults
+} from "./tools"
 import { MATCH_WIN_RULES, PHASE_TYPES } from "./types"
 import type {
   Opponent,
@@ -9,10 +17,9 @@ import type {
   Result,
   SetId,
   MatchId,
+  Stats,
   TournamentPhase,
-  matchIdString,
-  SetContribCache,
-  MatchContribCache
+  matchIdString
 } from "./types"
 
 export interface Phase {
@@ -21,7 +28,7 @@ export interface Phase {
 
   /**
    * Initializes the phase with the ids of its opponents and its settings: validates them, creates an opponent for each
-   * id in the order of the list, which sets the seeding (without forfeit and with zeroed stats), copies the settings,
+   * id in the order of the list, which sets the seeding (without forfeit), copies the settings,
    * generates the matches and progresses the walkovers. Each id must be a non-empty string, unique in the list. To
    * declare a forfeit before the phase starts, call `toggleForfeit` after `init`. It can only succeed once: any later call throws, while a call rejected by validation
    * leaves the phase empty and can be retried.
@@ -30,8 +37,9 @@ export interface Phase {
   init(opponentIds: OpponentId[], settings: PhaseSettings): void
 
   /**
-   * Returns the current ranking of the phase, one entry per opponent, sorted by rank, computed on each call from the
-   * opponents' forfeit and telemetry. Returns an empty list before `init`.
+   * Returns the current ranking of the phase, one entry per opponent, sorted by rank. Each entry carries the opponent's
+   * stats, the only place where the phase exposes them. Stats and ranks are computed on each call from the opponents'
+   * forfeit and the current state of the matches. Returns an empty list before `init`.
    */
   getResult(): Result[]
   /**
@@ -47,7 +55,7 @@ export interface Phase {
   getOpponents(includeForfeited: boolean): Opponent[]
   /**
    * Toggles the forfeit status of an opponent, then re-progresses the phase so that
-   * matches, telemetry and results reflect the new forfeit state.
+   * matches, and therefore the results read afterwards, reflect the new forfeit state.
    * A match resolved by a forfeit carries the score `"FF"` for each opponent who forfeited, and no score for the other
    * opponents. This is the only way to write `"FF"`. How a forfeit resolves a match depends on the phase type.
    */
@@ -60,7 +68,7 @@ export interface Phase {
 
   /**
    * Records (or removes, when score is undefined) an opponent's score for a given set, then progresses the
-   * tournament and recomputes telemetry accordingly.
+   * tournament. The results read afterwards reflect the new score.
    * The score must be a finite number or undefined: `"FF"` is rejected, as only a declared forfeit (`toggleForfeit`)
    * writes it.
    */
@@ -77,12 +85,6 @@ export abstract class PhaseBase implements Phase {
 
   // Avoid to search for matches to progress by caching the edited ones
   protected matchesToProgress: Map<matchIdString, MatchId> = new Map()
-  // Avoid to search for players to update telemetry by caching the edited ones
-  protected playersToUpdateTelemetry: Set<OpponentId> = new Set()
-  // Data updated when a set is complete
-  protected setContribCache: SetContribCache = {}
-  // Data updated when the match is complete
-  protected matchContribCache: MatchContribCache = {}
 
   protected matchIndex: Map<matchIdString, Match> = new Map()
 
@@ -101,32 +103,16 @@ export abstract class PhaseBase implements Phase {
   /**
    * This method is called after a score is set, and should progress the tournament if needed.
    * It is up to the subclass to implement the logic for progressing the tournament, as it depends on the phase type.
-   * Update telemetry of the match opponents if needed.
    */
   protected abstract progress(): void
 
   /**
-   * This method is called from score() when a set is complete.
-   * It saves the contribution of each opponent in the set to the setContribCache, so that it can be
-   * used later to update telemetry or progress the tournament without parsing all the matches again.
-   * @param setId The ID of the set to save
-   * @param match The match containing the set to save
+   * Fills the stats of every opponent from the current state of the matches. Called by getResult() on each read.
+   * The map already holds an entry from newStats() for each opponent of the phase: the format fills these entries and
+   * ignores any id the map doesn't hold, such as the walkover's.
+   * @param stats The stats to fill, by opponent id
    */
-  protected abstract updateSetCache(setId: SetId, match: Match): void
-
-  /**
-   * This method is called from progress() when a match is complete.
-   * It saves the contribution of each opponent in the match to the matchContribCache, so that it can be
-   * used later to update telemetry or progress the tournament without parsing all the matches again.
-   * @param match The match to save
-   */
-  protected abstract updateMatchCache(match: Match): void
-
-  /**
-   * Updates the telemetry for the opponents in PhaseBase.opponentsToUpdateTelemetry
-   *
-   */
-  protected abstract updatePlayersTelemetry(): void
+  protected abstract fillStats(stats: Map<OpponentId, Stats>): void
 
   public init(opponentIds: OpponentId[], settings: PhaseSettings): void {
     if (this.initialized) {
@@ -145,16 +131,18 @@ export abstract class PhaseBase implements Phase {
   }
 
   public getResult(): Result[] {
+    const stats = new Map<OpponentId, Stats>(this.opponents.map((opponent) => [opponent.id, newStats()]))
+    this.fillStats(stats)
     const results: Result[] = this.opponents
       .map((opponent) => ({
         opponentId: opponent.id,
         rank: 0,
         forfeit: opponent.forfeit,
-        telemetry: { ...opponent.stats }
+        stats: stats.get(opponent.id)!
       }))
       .sort(
         // TODO: Validate the sorting criteria
-        ({ forfeit: ffa, telemetry: a }, { forfeit: ffb, telemetry: b }) =>
+        ({ forfeit: ffa, stats: a }, { forfeit: ffb, stats: b }) =>
           (ffa ? 1 : 0) - (ffb ? 1 : 0) ||
           b.matchesWon - a.matchesWon ||
           b.setsWon - a.setsWon ||
@@ -197,7 +185,6 @@ export abstract class PhaseBase implements Phase {
       this.matchesToProgress.set(idToString(matchToProgress.id), matchToProgress.id)
     }
     this.progress()
-    this.updatePlayersTelemetry()
   }
 
   public getMatch(matchId: MatchId): Match | undefined {
@@ -227,8 +214,6 @@ export abstract class PhaseBase implements Phase {
     } else {
       set.scores[opponentId] = score
     }
-    // update the setContribCache for all opponents in the match
-    this.updateSetCache(setId, match)
     // Mark the match as complete if needed
     match.complete = false
     if (this.matchIsComplete(match)) {
@@ -236,7 +221,6 @@ export abstract class PhaseBase implements Phase {
     }
     this.matchesToProgress.set(idToString(match.id), match.id)
     this.progress()
-    this.updatePlayersTelemetry()
   }
 
   protected validateOpponentIds(opponentIds: OpponentId[]): void {

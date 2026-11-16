@@ -1,4 +1,4 @@
-import type { Match, MatchId, MatchSet, NodeId, Opponent, OpponentId, Result, Telemetry } from "./types"
+import type { Match, MatchId, MatchSet, NodeId, Opponent, OpponentId, Result, Stats } from "./types"
 
 /**
  * Checks if the provided NodeId matches the filter.
@@ -38,7 +38,7 @@ export function newMatch(id: MatchId, nbSets: number, opponents: number): Match 
   return { id, opponents: Array(opponents).fill(undefined) as Opponent[], sets, locked: false, complete: false }
 }
 
-export function newTelemetry(): Telemetry {
+export function newStats(): Stats {
   return {
     matchesPlayed: 0,
     matchesRemaining: 0,
@@ -51,23 +51,23 @@ export function newTelemetry(): Telemetry {
     setsDraw: 0,
     scoredPoints: 0,
     concededPoints: 0,
-    ratioPoints: 0
+    ratioPoints: 0 // computeScoreRatio(0, 0): no points counted yet
   }
 }
 
 /**
- * Creates one opponent per id, in the order of the list, without a forfeit and with zeroed stats.
+ * Creates one opponent per id, in the order of the list, without a forfeit.
  */
 export function newOpponents(opponentIds: OpponentId[]): Opponent[] {
-  return opponentIds.map((id) => ({ id, forfeit: false, stats: newTelemetry() }))
+  return opponentIds.map((id) => ({ id, forfeit: false }))
 }
 
 export function computeScoreRatio(scored: number, conceded: number): number {
-  return scored + conceded === 0 ? 0.5 : ((scored - conceded) / (scored + conceded) + 1) / 2 // between 0 and 1, 0.5 if draw
+  return scored + conceded === 0 ? 0 : (scored - conceded) / (scored + conceded) / 2 // between -0.5 and 0.5, 0 if draw
 }
 
 export function deepCopyOpponents(opponents: (Opponent | undefined)[]): (Opponent | undefined)[] {
-  return opponents.map((o) => (o ? { ...o, stats: { ...o.stats } } : undefined))
+  return opponents.map((o) => (o ? { ...o } : undefined))
 }
 export function deepCopyMatch(match: Match | undefined): Match | undefined {
   if (!match) {
@@ -84,8 +84,8 @@ export function deepCopyMatch(match: Match | undefined): Match | undefined {
 export function sameResults(a: Result, b: Result): boolean {
   if (a === b) return true
   if (a.forfeit !== b.forfeit) return false
-  for (const key in a.telemetry) {
-    if (a.telemetry[key as keyof Telemetry] !== b.telemetry[key as keyof Telemetry]) {
+  for (const key in a.stats) {
+    if (a.stats[key as keyof Stats] !== b.stats[key as keyof Stats]) {
       return false
     }
   }
